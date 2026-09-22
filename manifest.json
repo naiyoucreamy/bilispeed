@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "BiliSpeed - B站自定义倍速",
+  "version": "1.0.0",
+  "description": "在 B 站视频页面自定义播放速度（0.25x ~ 16x，步进 0.25），记住设置并自动恢复被重置的倍速。",
+  "minimum_chrome_version": "102",
+
+  "permissions": ["storage", "scripting"],
+  "host_permissions": ["*://*.bilibili.com/*"],
+
+  "content_scripts": [
+    {
+      "matches": ["*://*.bilibili.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+
+  "action": {
+    "default_title": "BiliSpeed 倍速控制",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
