@@ -44,6 +44,13 @@ body {
   color: var(--fg);
 }
 
+.head-note {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
 .card {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -66,12 +73,31 @@ body {
   line-height: 1.1;
 }
 
+.rate-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+
 .tag {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 2px 8px;
+}
+
+/* “已单独设置”高亮标（当前版本按标签页记速，样式保留备用） */
+.tag-custom {
+  color: var(--brand);
+  border-color: var(--brand);
+  background: #eaf9ff;
 }
 
 /* 滑块 */
@@ -179,9 +205,67 @@ body {
   border-color: var(--brand-dark);
 }
 
+/* 次要的文字型按钮（清除单个视频的设置） */
+.btn-ghost {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border-style: dashed;
+}
+
+.btn-ghost:hover {
+  color: #ff6699;
+  border-color: #ff6699;
+  background: #fff5f8;
+}
+
+.btn:disabled,
+.preset:disabled,
+.slider:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn:disabled:hover,
+.preset:disabled:hover {
+  background: #fff;
+  border-color: var(--line);
+}
+
+/* 底部 */
+.foot {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.tip {
+  margin: 0 0 6px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.link {
+  padding: 0;
+  font-size: 10px;
+  color: var(--muted);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.link:hover {
+  color: #ff6699;
+}
+
 /* 底部状态栏 */
 .status {
-  margin-top: 10px;
+  margin-top: 8px;
   min-height: 15px;
   font-size: 11px;
   color: var(--muted);

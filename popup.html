@@ -8,12 +8,15 @@
 <body>
   <header class="head">
     <span class="logo">Bili</span><span class="logo logo-alt">Speed</span>
+    <span class="head-note">仅当前标签页</span>
   </header>
 
   <section class="card">
     <div class="rate-row">
       <output id="rateText" class="rate">1.00x</output>
-      <span id="tag" class="tag">当前页面</span>
+      <div class="rate-meta">
+        <span id="tag" class="tag">读取中…</span>
+      </div>
     </div>
 
     <input
@@ -24,13 +27,13 @@
       max="16"
       step="0.25"
       value="1"
-      aria-label="播放速度" />
+      aria-label="当前标签页的播放速度" />
 
     <div class="ticks">
       <span>0.25x</span><span>4x</span><span>8x</span><span>16x</span>
     </div>
 
-    <!-- 快捷档位，方便一键跳到常用速度 -->
+    <!-- 快捷档位 -->
     <div class="presets">
       <button class="preset" data-rate="0.5">0.5x</button>
       <button class="preset" data-rate="1">1x</button>
@@ -49,7 +52,10 @@
     </div>
   </section>
 
-  <footer id="status" class="status">就绪</footer>
+  <footer class="foot">
+    <p class="tip">只作用于当前标签页；关闭标签页后速度自动清除，新标签页从 1x 开始。</p>
+    <p id="status" class="status">就绪</p>
+  </footer>
 
   <script src="popup.js"></script>
 </body>
