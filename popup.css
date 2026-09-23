@@ -378,6 +378,138 @@ body:hover .close,
   outline-offset: 1px;
 }
 
+/* ---------------- 「关于」入口：整行可点，右侧带箭头 ----------------
+   放在设置界面最下面，是这一屏唯一的导航项，所以用整行而不是小按钮。 */
+.nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 9px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-mid);
+  text-align: left;
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), transform 0.1s var(--ease);
+}
+
+.nav-arrow {
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-faint);
+  transition: color var(--dur) var(--ease);
+}
+
+.nav-row:hover {
+  color: var(--brand-deep);
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
+}
+
+.nav-row:hover .nav-arrow {
+  color: var(--brand-deep);
+}
+
+.nav-row:active {
+  transform: scale(0.985);
+}
+
+.nav-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* ============================================================
+   关于界面：第三屏
+   ============================================================ */
+
+#aboutView[hidden] {
+  display: none;
+}
+
+#aboutView {
+  min-height: 84px;
+}
+
+.about-list {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+
+.about-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+}
+
+/* 第一项不要那条分隔线，它紧跟在标题下面 */
+.about-item:first-child {
+  border-top: 0;
+}
+
+.about-item dt {
+  flex: 0 0 auto;
+  color: var(--text-soft);
+}
+
+.about-item dd {
+  margin: 0;
+  color: var(--text-mid);
+  font-weight: 500;
+  text-align: right;
+}
+
+/* ---------------- 作者渠道：只露渠道名，URL 在 href 里 ----------------
+   三个并排的小胶囊，宽度均分，长短名字都不会把排版挤歪。 */
+.about-links {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.about-link {
+  flex: 1 1 0;
+  padding: 7px 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-align: center;
+  /* 链接默认的蓝色下划线不要，按钮化的观感更统一 */
+  text-decoration: none;
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), transform 0.1s var(--ease);
+}
+
+.about-link:hover {
+  color: var(--brand-deep);
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
+}
+
+.about-link:active {
+  transform: scale(0.96);
+}
+
+.about-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
 /* ============================================================
    速度读数：整块面板的视觉重心
    数字用强调色 + 等宽数字，单位弱化；右侧加减键作为精调

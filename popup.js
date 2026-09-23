@@ -51,6 +51,10 @@ const mainView = document.getElementById('mainView');
 const settingsView = document.getElementById('settingsView');
 const settingsExitBtn = document.getElementById('settingsExitBtn');
 const themeToggle = document.getElementById('darkModeToggle');
+const aboutBtn = document.getElementById('aboutBtn');
+const aboutView = document.getElementById('aboutView');
+const aboutBackBtn = document.getElementById('aboutBackBtn');
+const aboutVersionEl = document.getElementById('aboutVersion');
 const presetButtons = Array.from(document.querySelectorAll('.preset'));
 
 /* ---------------------------- 状态 ---------------------------- */
@@ -507,24 +511,29 @@ function applyTheme(theme) {
 /* ---------------------------- 界面切换 ---------------------------- */
 
 /**
- * 在「倍速主界面」与「设置界面」之间切换。
+ * 在「倍速主界面 / 设置界面 / 关于界面」之间切换。
  *
- * 两屏是同一份文档里的兄弟节点，靠 [hidden] 互斥显示，不重新加载页面：
+ * 三屏是同一份文档里的兄弟节点，靠 [hidden] 互斥显示，不重新加载页面：
  *   - 这样回到主界面时速度读数、滑块位置原样还在，不用重新读一遍；
  *   - 内嵌面板的高度由挂在 body 上的 ResizeObserver 自动重测上报，
  *     所以这里不用手动通知外层，floating.js 会自己跟着改面板高度。
  *
- * @param {boolean} open true = 进设置界面，false = 回倍速界面
+ * 齿轮按钮只在倍速主界面显示（另两屏各自有「退出」/「返回」），
+ * 所以进设置或关于时都要把它收起来。
+ *
+ * @param {'main'|'settings'|'about'} view 目标界面
  */
-function showSettings(open) {
-  settingsOpen = open;
-  if (mainView) mainView.hidden = open;
-  if (settingsView) settingsView.hidden = !open;
-  // 进入设置后收起齿轮：那一屏已经有「退出」，不留第二个入口
-  if (settingsBtn) settingsBtn.hidden = open;
+function showView(view) {
+  settingsOpen = view !== 'main';
+  if (mainView) mainView.hidden = view !== 'main';
+  if (settingsView) settingsView.hidden = view !== 'settings';
+  if (aboutView) aboutView.hidden = view !== 'about';
+  if (settingsBtn) settingsBtn.hidden = view !== 'main';
 
-  // 把焦点交给新屏幕上的按钮，键盘用户不至于原地丢失焦点
-  const target = open ? settingsExitBtn : settingsBtn;
+  // 把焦点交给新屏幕上的主要按钮，键盘用户不至于原地丢失焦点
+  const target = view === 'about'
+    ? aboutBackBtn
+    : (view === 'settings' ? settingsExitBtn : settingsBtn);
   if (target && typeof target.focus === 'function') target.focus();
 }
 
@@ -573,12 +582,19 @@ if (closeBtn) {
   });
 }
 
-// 齿轮进设置界面，设置界面里的「退出」回倍速界面
+// 齿轮进设置界面；设置界面的「退出」回倍速界面；「关于」进关于界面、
+// 关于界面的「返回」退回到设置界面（它就是从那里进去的）
 if (settingsBtn) {
-  settingsBtn.addEventListener('click', () => showSettings(true));
+  settingsBtn.addEventListener('click', () => showView('settings'));
 }
 if (settingsExitBtn) {
-  settingsExitBtn.addEventListener('click', () => showSettings(false));
+  settingsExitBtn.addEventListener('click', () => showView('main'));
+}
+if (aboutBtn) {
+  aboutBtn.addEventListener('click', () => showView('about'));
+}
+if (aboutBackBtn) {
+  aboutBackBtn.addEventListener('click', () => showView('settings'));
 }
 
 // 暗色开关：theme.js 已在首帧前设过一次，这里对齐开关状态并接管后续切换
@@ -591,12 +607,25 @@ if (themeToggle) {
   });
 }
 
+// 关于界面里的版本号：从 manifest 取，不写死在 HTML 里 ——
+// 免得以后升版本时漏改这一处，界面上显示的和实际装的对不上。
+if (aboutVersionEl) {
+  try {
+    const v = chrome.runtime.getManifest().version;
+    aboutVersionEl.textContent = v ? `v${v}` : '—';
+  } catch (err) {
+    /* 取不到就保留占位符，不影响其它功能 */
+  }
+}
+
 // PageUp / PageDown 快速跳档（←/→ 由原生 range 处理）
 document.addEventListener('keydown', (event) => {
   if (settingsOpen) {
-    // 设置界面里不该偷偷改倍速；Esc 等同于「退出」
+    // 设置/关于界面里不该偷偷改倍速；Esc 退回上一层
     if (event.key === 'Escape') {
-      showSettings(false);
+      // 关于是从设置进去的，Esc 先回设置；设置里再按 Esc 才回倍速界面
+      const onAbout = aboutView && !aboutView.hidden;
+      showView(onAbout ? 'settings' : 'main');
       event.preventDefault();
     }
     return;

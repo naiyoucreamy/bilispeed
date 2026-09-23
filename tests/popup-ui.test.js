@@ -124,7 +124,11 @@ function createEnv({ tab, pageRate, hasVideo = true, contentAnswers = true, them
         cb(contentAnswers ? { ok: true, rate: message.rate } : null);
       },
     },
-    runtime: { lastError: undefined },
+    runtime: {
+      lastError: undefined,
+      // 关于界面里的版本号取自 manifest，桩要照实提供
+      getManifest: () => ({ version: '2.1.0' }),
+    },
     storage: { sync: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
     scripting: { executeScript: async () => [] },
   };
@@ -194,7 +198,10 @@ function createEmbeddedEnv({ pageRate = 3, hasVideo = true } = {}) {
         cb({ ok: true, rate: message.rate });
       },
     },
-    runtime: { lastError: undefined },
+    runtime: {
+      lastError: undefined,
+      getManifest: () => ({ version: '2.1.0' }),
+    },
     scripting: { executeScript: async () => [] },
   };
 
@@ -809,6 +816,139 @@ const BV_TAB = { id: 1, url: 'https://www.bilibili.com/video/BV1AA411c7de' };
     check('manifest_version 仍是 3（没被顺手改坏）', MANIFEST.manifest_version, 3);
     check('工具栏入口没变', MANIFEST.action.default_popup, 'popup.html');
     check('权限没被放大', MANIFEST.permissions, ['storage', 'scripting']);
+  }
+
+  console.log('\n[17] 关于界面：从设置最下面进入，可返回设置');
+  {
+    // ---- 结构 ----
+    for (const id of ['aboutView', 'aboutBtn', 'aboutBackBtn', 'aboutVersion']) {
+      check(`存在 #${id}`, ids.includes(id), true);
+    }
+    check('#aboutView 初始 hidden（先显示倍速界面）',
+      /id="aboutView"[^>]*hidden/.test(HTML), true);
+
+    // 「关于」按钮必须在设置界面之内，且在暗色开关**之后**（也就是最下面）
+    const settingsBlock = (HTML.match(/id="settingsView"[\s\S]*?<\/main>/) || [''])[0];
+    check('「关于」按钮在设置界面里', /id="aboutBtn"/.test(settingsBlock), true);
+    check('「关于」按钮排在暗色开关之后（位于最下面）',
+      settingsBlock.indexOf('darkModeToggle') < settingsBlock.indexOf('aboutBtn'), true);
+    check('「关于」不是最后一屏的复制而是独立一屏',
+      /id="aboutView"/.test(HTML) && settingsBlock.includes('aboutBtn'), true);
+
+    // ---- 几何：整行可点、有悬停与焦点反馈 ----
+    const nav = (CSS.match(/\.nav-row\s*\{[\s\S]*?\n\}/) || [''])[0];
+    check('「关于」是整行宽度', /width:\s*100%/.test(nav), true);
+    check('「关于」有悬停反馈', /\.nav-row:hover\s*\{/.test(CSS), true);
+    check('「关于」有键盘焦点环', /\.nav-row:focus-visible/.test(CSS), true);
+    check('关于界面有独立的 hidden 规则', /#aboutView\[hidden\]\s*\{\s*display:\s*none/.test(CSS), true);
+
+    // ---- 交互：三屏互斥 ----
+    const env = createEnv({ tab: BV_TAB, pageRate: 2 });
+    await wait(30);
+    const views = () => [
+      env.el('mainView').hidden,
+      env.el('settingsView').hidden,
+      env.el('aboutView').hidden,
+    ];
+    check('初始：只显示倍速界面', views(), [false, true, true]);
+
+    env.el('settingsBtn')._fire('click');
+    check('进设置：只显示设置界面', views(), [true, false, true]);
+
+    env.el('aboutBtn')._fire('click');
+    check('点「关于」：只显示关于界面', views(), [true, true, false]);
+    check('进关于后齿轮仍收起', env.el('settingsBtn').hidden, true);
+
+    env.el('aboutBackBtn')._fire('click');
+    check('点「返回」：回到设置界面（不是回倍速）', views(), [true, false, true]);
+
+    env.el('settingsExitBtn')._fire('click');
+    check('点「退出」：回到倍速界面', views(), [false, true, true]);
+    check('回主界面后齿轮重新出现', env.el('settingsBtn').hidden, false);
+
+    // ---- 切屏依然不能碰倍速 ----
+    const before = env.sentMessages.length;
+    env.el('settingsBtn')._fire('click');
+    env.el('aboutBtn')._fire('click');
+    env.el('aboutBackBtn')._fire('click');
+    env.el('settingsExitBtn')._fire('click');
+    await wait(120);
+    check('三屏来回切换不下发任何命令', env.sentMessages.length, before);
+    check('切屏后读数不变', env.el('rateValue').textContent, '2.00');
+
+    // ---- 版本号取自 manifest，不写死 ----
+    check('版本号从 manifest 读取并加上 v',
+      env.el('aboutVersion').textContent, 'v2.1.0');
+    check('HTML 里没有写死版本号（避免升级时漏改）',
+      /v?2\.1\.0/.test(HTML.replace(/<!--[\s\S]*?-->/g, '')), false);
+    check('HTML 里版本是占位符', /id="aboutVersion">—</.test(HTML), true);
+
+    // ---- 内嵌面板里同样能用 ----
+    const emb = createEmbeddedEnv({ pageRate: 1 });
+    emb.el('settingsBtn')._fire('click');
+    emb.el('aboutBtn')._fire('click');
+    check('内嵌时也能进关于界面', emb.el('aboutView').hidden, false);
+    check('内嵌时「返回」回设置', (emb.el('aboutBackBtn')._fire('click'), emb.el('settingsView').hidden), false);
+    check('逛关于不误发 panelClose',
+      emb.posted.filter((m) => m.type === 'bilispeed:panelClose').length, 0);
+  }
+
+  console.log('\n[18] 关于里的作者信息：URL 只藏在 href，界面上不出现');
+  {
+    const aboutBlock = (HTML.match(/id="aboutView"[\s\S]*?<\/main>/) || [''])[0];
+
+    check('关于界面里有作者名', /<dt>作者<\/dt>/.test(aboutBlock), true);
+    check('作者名是「奶油」', /<dd>奶油<\/dd>/.test(aboutBlock), true);
+
+    // ---- 三个渠道都在，且显示的是渠道名而不是 URL ----
+    const links = [...aboutBlock.matchAll(/<a\b[^>]*>([^<]*)<\/a>/g)]
+      .map((m) => ({ text: m[1], href: (m[0].match(/href="([^"]+)"/) || [])[1] }));
+    check('有 3 个作者渠道', links.length, 3);
+    check('显示的是渠道名', links.map((l) => l.text), ['B站', 'GitHub', 'YouTube']);
+
+    // 显示文字里不能混进 URL / 域名 / 协议
+    for (const l of links) {
+      check(`「${l.text}」的显示文字不含 http`, /https?:|www\.|\/\//.test(l.text), false);
+    }
+
+    // ---- 核心诉求：界面上不出现链接明文 ----
+    // 只看用户能看见的文本：去掉注释、<script>、以及所有标签属性
+    const visible = aboutBlock
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<script[\s\S]*?<\/script>/g, '')
+      .replace(/<[^>]*>/g, ' ');
+    for (const needle of ['http', 'https', 'www.', '.com', '.git', 'youtube.com',
+      'github.com', 'bilibili.com', 'space.', '@']) {
+      check(`关于界面的可见文字不含「${needle}」`, visible.includes(needle), false);
+    }
+    // 摊平所有空白之后再查一次，防止被换行/实体切碎绕过
+    const flat = visible.replace(/\s+/g, '');
+    check('可见文字里没有裸链接', /https?:\/\//.test(flat), false);
+    check('可见文字里没有裸域名', /[\w-]+\.(com|cn|net|org|git)\b/.test(flat), false);
+
+    // ---- URL 必须真的在 href 里，而且是对的 ----
+    const byText = Object.fromEntries(links.map((l) => [l.text, l.href]));
+    check('B站链接', byText['B站'], 'https://space.bilibili.com/3546584163814345');
+    check('GitHub 链接', byText['GitHub'], 'https://github.com/naiyoucreamy/bilispeed');
+    check('YouTube 链接', byText['YouTube'],
+      'https://www.youtube.com/@%E4%B8%80%E4%B8%AA%E5%B0%8F%E7%81%B0%E6%9C%BA');
+
+    // ---- 新标签页打开 + 不泄露来源 ----
+    const tags = [...aboutBlock.matchAll(/<a\b[^>]*>/g)].map((m) => m[0]);
+    for (const t of tags) {
+      const href = (t.match(/href="([^"]+)"/) || [])[1] || '';
+      check(`${href.slice(8, 26)}… 是新标签页打开`, /target="_blank"/.test(t), true);
+      check(`${href.slice(8, 26)}… 带 rel=noreferrer`, /rel="noreferrer"/.test(t), true);
+      check(`${href.slice(8, 26)}… 是 https`, /^https:\/\//.test(href), true);
+    }
+
+    // ---- 渠道按钮的样式：链接不能被浏览器默认蓝紫下划线接管 ----
+    check('渠道按钮去掉了默认下划线',
+      /\.about-link\s*\{[\s\S]*?text-decoration:\s*none/.test(CSS), true);
+    check('渠道按钮有悬停反馈', /\.about-link:hover\s*\{/.test(CSS), true);
+    check('渠道按钮有键盘焦点环', /\.about-link:focus-visible/.test(CSS), true);
+    check('渠道按钮是 <a> 而不是 <button>（能被右键复制/新窗口打开）',
+      /<a class="about-link"/.test(aboutBlock), true);
   }
 
   console.log(`\n结果：${pass} 通过 / ${fail} 失败\n`);

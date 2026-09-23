@@ -69,6 +69,54 @@
       <label class="setting-name" for="darkModeToggle">暗色模式</label>
       <input id="darkModeToggle" class="switch" type="checkbox" />
     </div>
+
+    <!-- 最下面：进入关于界面 -->
+    <button id="aboutBtn" class="nav-row" type="button">
+      <span>关于</span>
+      <span class="nav-arrow" aria-hidden="true">›</span>
+    </button>
+  </main>
+
+  <!-- 关于界面：第三屏，同样靠 [hidden] 与另两屏互斥。
+       右上角的「返回」回到设置界面（不是回倍速界面） -->
+  <main class="card" id="aboutView" hidden>
+    <div class="settings-top">
+      <h1 class="settings-title">关于</h1>
+      <button id="aboutBackBtn" class="exit" type="button">返回</button>
+    </div>
+
+    <dl class="about-list">
+      <div class="about-item">
+        <dt>名称</dt>
+        <dd>BiliSpeed 倍速控制</dd>
+      </div>
+      <div class="about-item">
+        <dt>版本</dt>
+        <dd id="aboutVersion">—</dd>
+      </div>
+      <div class="about-item">
+        <dt>用途</dt>
+        <dd>给 B 站视频设置播放倍速</dd>
+      </div>
+      <div class="about-item">
+        <dt>作者</dt>
+        <dd>奶油</dd>
+      </div>
+    </dl>
+
+    <!-- 作者渠道：界面上只出现渠道名，真实 URL 全部放在 href 里，
+         所以面板上看不到任何链接字符串。
+         新标签页打开：MV3 的扩展页允许 target="_blank"；
+         rel="noreferrer" 免得把扩展页地址透给对面。 -->
+    <div class="about-links">
+      <a class="about-link" id="authorBili" href="https://space.bilibili.com/3546584163814345"
+         target="_blank" rel="noreferrer">B站</a>
+      <a class="about-link" id="authorGitHub" href="https://github.com/naiyoucreamy/bilispeed"
+         target="_blank" rel="noreferrer">GitHub</a>
+      <a class="about-link" id="authorYouTube"
+         href="https://www.youtube.com/@%E4%B8%80%E4%B8%AA%E5%B0%8F%E7%81%B0%E6%9C%BA"
+         target="_blank" rel="noreferrer">YouTube</a>
+    </div>
   </main>
 
   <script src="popup.js"></script>
