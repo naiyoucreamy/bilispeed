@@ -46,6 +46,11 @@ const resetBtn = document.getElementById('resetBtn');
 const minusBtn = document.getElementById('minusBtn');
 const plusBtn = document.getElementById('plusBtn');
 const closeBtn = document.getElementById('closeBtn');
+const settingsBtn = document.getElementById('settingsBtn');
+const mainView = document.getElementById('mainView');
+const settingsView = document.getElementById('settingsView');
+const settingsExitBtn = document.getElementById('settingsExitBtn');
+const themeToggle = document.getElementById('darkModeToggle');
 const presetButtons = Array.from(document.querySelectorAll('.preset'));
 
 /* ---------------------------- 状态 ---------------------------- */
@@ -74,6 +79,8 @@ let userTouched = false;
 let closePanel = null;
 /** 上报高度用的 ResizeObserver（只挂一次） */
 let heightObserver = null;
+/** 当前是否停在设置界面 */
+let settingsOpen = false;
 
 /**
  * 现在能不能把速度发出去。
@@ -441,6 +448,71 @@ function setRate(rate, options = {}) {
   else scheduleSend(uiRate);
 }
 
+/* ---------------------------- 明暗主题 ---------------------------- */
+
+/**
+ * 主题只有两档：light = 原来的样子，dark = 暗色模式。
+ *
+ * 存 localStorage 而不是 chrome.storage —— 只有它能**同步**读，
+ * 而首帧必须在上色之前就知道答案。那次同步读写在 theme.js 里（head 中执行），
+ * 这里只负责切换、记忆，以及万一 theme.js 没跑起来时补一刀。
+ * 内嵌在悬浮面板里时，localStorage 与工具栏弹窗同源，所以两边看到的主题一致。
+ */
+const THEME_KEY = 'bilispeed.theme';
+const THEME_LIGHT = 'light';
+const THEME_DARK = 'dark';
+
+/** 读已保存的主题；读不到 / 读不了都按浅色算 */
+function readTheme() {
+  try {
+    return localStorage.getItem(THEME_KEY) === THEME_DARK ? THEME_DARK : THEME_LIGHT;
+  } catch (err) {
+    return THEME_LIGHT;
+  }
+}
+
+/**
+ * 应用并记住主题。
+ * 只动 <html> 上的 data-theme，不去碰 theme.js 加的 .is-embedded
+ * （那个类决定内嵌时要不要给 <html> 铺底色，跟主题是两件事）。
+ * @param {string} theme 'light' | 'dark'
+ */
+function applyTheme(theme) {
+  const root = document.documentElement;
+  if (root && typeof root.setAttribute === 'function') {
+    root.setAttribute('data-theme', theme);
+  }
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch (err) {
+    /* 存不下就只在本次会话生效，不影响使用 */
+  }
+}
+
+/* ---------------------------- 界面切换 ---------------------------- */
+
+/**
+ * 在「倍速主界面」与「设置界面」之间切换。
+ *
+ * 两屏是同一份文档里的兄弟节点，靠 [hidden] 互斥显示，不重新加载页面：
+ *   - 这样回到主界面时速度读数、滑块位置原样还在，不用重新读一遍；
+ *   - 内嵌面板的高度由挂在 body 上的 ResizeObserver 自动重测上报，
+ *     所以这里不用手动通知外层，floating.js 会自己跟着改面板高度。
+ *
+ * @param {boolean} open true = 进设置界面，false = 回倍速界面
+ */
+function showSettings(open) {
+  settingsOpen = open;
+  if (mainView) mainView.hidden = open;
+  if (settingsView) settingsView.hidden = !open;
+  // 进入设置后收起齿轮：那一屏已经有「退出」，不留第二个入口
+  if (settingsBtn) settingsBtn.hidden = open;
+
+  // 把焦点交给新屏幕上的按钮，键盘用户不至于原地丢失焦点
+  const target = open ? settingsExitBtn : settingsBtn;
+  if (target && typeof target.focus === 'function') target.focus();
+}
+
 /* ---------------------------- 事件绑定 ---------------------------- */
 
 // 滑块：input 期间只更新 UI + 节流下发，保证拖动顺滑
@@ -486,8 +558,34 @@ if (closeBtn) {
   });
 }
 
+// 齿轮进设置界面，设置界面里的「退出」回倍速界面
+if (settingsBtn) {
+  settingsBtn.addEventListener('click', () => showSettings(true));
+}
+if (settingsExitBtn) {
+  settingsExitBtn.addEventListener('click', () => showSettings(false));
+}
+
+// 暗色开关：theme.js 已在首帧前设过一次，这里对齐开关状态并接管后续切换
+if (themeToggle) {
+  const initialTheme = readTheme();
+  applyTheme(initialTheme); // theme.js 万一没加载，这里补上
+  themeToggle.checked = initialTheme === THEME_DARK;
+  themeToggle.addEventListener('change', () => {
+    applyTheme(themeToggle.checked ? THEME_DARK : THEME_LIGHT);
+  });
+}
+
 // PageUp / PageDown 快速跳档（←/→ 由原生 range 处理）
 document.addEventListener('keydown', (event) => {
+  if (settingsOpen) {
+    // 设置界面里不该偷偷改倍速；Esc 等同于「退出」
+    if (event.key === 'Escape') {
+      showSettings(false);
+      event.preventDefault();
+    }
+    return;
+  }
   if (event.key === 'PageUp') {
     userTouched = true;
     setRate(Number((uiRate + 1).toFixed(2)), { immediate: true });

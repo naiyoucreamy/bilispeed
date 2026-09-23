@@ -51,6 +51,48 @@
   /* ---------------- 缓动 ---------------- */
   --ease: cubic-bezier(0.32, 0.72, 0.3, 1);
   --dur: 0.15s;
+
+  /* 原生控件（滚动条等）跟着主题走。默认是浅色，
+     所以即使系统是深色，工具栏弹窗也不会冒出深色滚动条。 */
+  color-scheme: light;
+}
+
+/* ============================================================
+   暗色模式：只覆盖颜色类令牌
+   圆角 / 缓动 / 尺寸 / 布局全部沿用上面那套，所以两套主题骨架完全一致。
+   由 theme.js 在首次绘制前写到 <html> 上，popup.js 负责切换与记忆。
+   ============================================================ */
+:root[data-theme="dark"] {
+  /* 深底上品牌色要提亮才有对比；「deep」在深色下反过来指更亮的一档 */
+  --brand: #35bdea;
+  --brand-deep: #79d6f7;
+  --brand-soft: #14313d;   /* 悬停底色 */
+  --brand-line: #1f4d5f;   /* 悬停描边 */
+
+  /* 文字层级同样靠亮度拉开，不另造色相 */
+  --text: #e9eef4;
+  --text-mid: #b6c1cd;
+  --text-soft: #8b97a5;
+  --text-faint: #616d7b;
+
+  --surface: #16191f;
+  --surface-sunken: #23272f;
+  --line: #2b3038;
+  --line-strong: #3b4149;
+
+  /* 深色下投影要更重才分得出层次 */
+  --shadow-flat: 0 1px 2px rgba(0, 0, 0, 0.5);
+
+  /* 原生控件也跟着翻黑 */
+  color-scheme: dark;
+}
+
+/* 内嵌在页面悬浮面板里时，让 <html> 铺满整个 iframe。
+   floating.js 在 iframe 后面垫了一层浅色底（防止加载瞬间透出页面），
+   暗色下它会从 body 圆角外侧露出来，铺满才能盖掉。
+   工具栏弹窗不能这样铺 —— 那里四角必须透明，弹窗才是圆角卡片形状。 */
+:root[data-theme="dark"].is-embedded {
+  background: var(--surface);
 }
 
 * {
@@ -141,6 +183,52 @@ body:hover .close,
   outline-offset: 1px;
 }
 
+/* ---------------- 设置按钮：贴在收起按钮正下方，同尺寸 ----------------
+   19px 圆，和「×」逐项同款；只是它两个入口都显示（工具栏弹窗里也要有设置入口），
+   所以不跟随 body:hover 淡入淡出，而是常驻可见。
+   top = 收起按钮的 14px + 高度 19px + 4px 间距 = 37px。 */
+.settings {
+  position: absolute;
+  top: 37px;
+  right: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease),
+    background var(--dur) var(--ease), border-color var(--dur) var(--ease), transform 0.1s var(--ease);
+}
+
+/* 进了设置界面就把它收起来（那一屏已经有「退出」），用 [hidden] 控制 */
+.settings[hidden] {
+  display: none;
+}
+
+.settings:hover {
+  color: var(--text-mid);
+  background: var(--surface-sunken);
+  border-color: var(--line);
+}
+
+.settings:active {
+  transform: scale(0.9);
+}
+
+.settings:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
 /* ---------------- 内容区：只是一层内边距，不是第二张卡片 ----------------
    圆角 / 描边 / 底色已经提到 body 上了，所以这里必须清掉自己的
    background / border / radius / shadow，否则又会出现“卡片套卡片”。 */
@@ -150,6 +238,144 @@ body:hover .close,
   border: 0;
   border-radius: 0;
   box-shadow: none;
+}
+
+/* ============================================================
+   设置界面：与倍速主界面互斥显示的第二屏
+   外壳只做「标题 + 退出」，具体设置项后面再往里加
+   ============================================================ */
+
+#settingsView[hidden] {
+  display: none;
+}
+
+#settingsView {
+  /* 右下角那一列图标键纵向占到 56px，这里给个下限，
+     免得以后删设置项把这一屏压成细条、把「×」裁掉。
+     当前内容自然高度约 82px，所以这条基本只是兜底。 */
+  min-height: 84px;
+}
+
+.settings-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* 右上角那一列留给「×」，别让「退出」被它压住 */
+  padding-right: 40px;
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.2px;
+  color: var(--text);
+}
+
+/* 退出：把这一屏收回去，回到倍速主界面 */
+.exit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-mid);
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), transform 0.1s var(--ease);
+}
+
+.exit:hover {
+  color: var(--brand-deep);
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
+}
+
+.exit:active {
+  transform: scale(0.96);
+}
+
+.exit:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* ---------------- 设置项：左标签 + 右开关 ---------------- */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.setting-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-mid);
+  cursor: pointer;
+}
+
+/* 开关：轨道 + 圆钮。关=灰轨，开=强调色轨 */
+.switch {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  background: var(--line-strong);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+
+/* 圆钮两套主题都用纯白：压在灰轨和彩色轨上都清楚 */
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: var(--shadow-flat);
+  transition: transform var(--dur) var(--ease);
+}
+
+.switch:checked {
+  background: var(--accent);
+}
+
+/* 38 - 2*1(边框) - 2*2(内缩) - 16(钮) = 16px 行程 */
+.switch:checked::after {
+  transform: translateX(16px);
+}
+
+.switch:hover:not(:disabled) {
+  /* --text-faint 在浅色下偏深、在深色下偏亮，两边都是“往重里走”的悬停反馈 */
+  background: var(--text-faint);
+}
+
+.switch:checked:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+
+.switch:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
 }
 
 /* ============================================================
@@ -164,7 +390,10 @@ body:hover .close,
      1.00 → 12.50 位数变化时，按钮一动不动。 */
   justify-content: flex-start;
   position: relative;
-  min-height: 34px;
+  /* 右上角纵向叠放「×」+「设置」两枚 19px 图标键，占 14→56px；
+     读数行的内容盒从 .card 的 13px 内边距之后开始，所以 13 + 46 = 59
+     才装得下（留 3px 余量）。不够高的话设置键会压到下面的滑块上。 */
+  min-height: 46px;
   margin-bottom: 9px;
 }
 
@@ -281,9 +510,11 @@ body:hover .close,
   border-radius: 50%;
   background: var(--surface);
   border: 2px solid var(--accent);
-  /* 白环让圆钮压在彩条上也看得清 */
+  /* 一圈底色环，让圆钮压在彩条上也看得清。
+     用 --surface 而不是写死白色：浅色下就是原来的白色，
+     暗色下自动变成面板底色，不至于在深底上糊一圈刺眼的白光。 */
   box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 0.92),
+    0 0 0 3px color-mix(in srgb, var(--surface) 92%, transparent),
     0 1px 3px rgba(16, 24, 40, 0.2);
   transition: transform 0.12s var(--ease), box-shadow 0.12s var(--ease);
 }
@@ -295,7 +526,7 @@ body:hover .close,
 .slider:active::-webkit-slider-thumb {
   transform: scale(1.16);
   box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 0.96),
+    0 0 0 3px color-mix(in srgb, var(--surface) 96%, transparent),
     0 3px 9px rgba(16, 24, 40, 0.24);
 }
 
@@ -306,7 +537,7 @@ body:hover .close,
 
 .slider:focus-visible::-webkit-slider-thumb {
   box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 1),
+    0 0 0 3px var(--surface),
     0 0 0 6px color-mix(in srgb, var(--accent) 32%, transparent),
     0 1px 3px rgba(16, 24, 40, 0.2);
 }

@@ -60,7 +60,33 @@ function createElement(id, tag = 'div') {
   };
 }
 
-function createEnv({ tab, pageRate, hasVideo = true, contentAnswers = true }) {
+/** 内存版 localStorage：主题读写要用，桩里必须能同步取 */
+function createLocalStorage() {
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => { map.set(k, String(v)); },
+    removeItem: (k) => { map.delete(k); },
+    clear: () => map.clear(),
+    _map: map,
+  };
+}
+
+/** documentElement：popup.js 会往上写 data-theme */
+function createRoot() {
+  const style = { props: {}, setProperty(k, v) { this.props[k] = v; } };
+  const attrs = {};
+  const classes = new Set();
+  return {
+    style,
+    setAttribute: (k, v) => { attrs[k] = String(v); },
+    getAttribute: (k) => (k in attrs ? attrs[k] : null),
+    classList: { add: (c) => classes.add(c), contains: (c) => classes.has(c) },
+    _attrs: attrs,
+  };
+}
+
+function createEnv({ tab, pageRate, hasVideo = true, contentAnswers = true, theme = null }) {
   const elements = new Map();
   for (const id of ids) elements.set(id, createElement(id));
 
@@ -71,11 +97,14 @@ function createEnv({ tab, pageRate, hasVideo = true, contentAnswers = true }) {
     return btn;
   });
 
-  const rootStyle = { props: {}, setProperty(k, v) { this.props[k] = v; } };
+  const root = createRoot();
+  const rootStyle = root.style;
+  const store = createLocalStorage();
+  if (theme) store.setItem('bilispeed.theme', theme); // 模拟“上次选了暗色”
   const sentMessages = [];
 
   const document = {
-    documentElement: { style: rootStyle },
+    documentElement: root,
     getElementById: (id) => elements.get(id) || null,
     querySelectorAll: (selector) => (selector === '.preset' ? presets : []),
     addEventListener: () => {},
@@ -104,12 +133,13 @@ function createEnv({ tab, pageRate, hasVideo = true, contentAnswers = true }) {
     window: { addEventListener: () => {} },
     document,
     chrome,
+    localStorage: store,
     console, Math, Number, Object, JSON, URL, URLSearchParams,
     setTimeout, clearTimeout, Promise, String, Boolean,
   });
   vm.runInContext(SRC, ctx, { filename: 'popup.js' });
 
-  return { elements, presets, rootStyle, sentMessages, el: (id) => elements.get(id) };
+  return { elements, presets, rootStyle, root, store, sentMessages, el: (id) => elements.get(id) };
 }
 
 /* ---------------- 页面悬浮按钮的内嵌场景 ----------------
@@ -124,7 +154,8 @@ function createEmbeddedEnv({ pageRate = 3, hasVideo = true } = {}) {
     return btn;
   });
 
-  const rootStyle = { props: {}, setProperty(k, v) { this.props[k] = v; } };
+  const root = createRoot();
+  const rootStyle = root.style;
   // body.children：高度上报靠它累加。这里如实还原三种元素：
   //   .card   -> 在文档流里，计入
   //   #closeBtn -> position:absolute 且 body 是它的定位祖先（offsetParent 非 null！）
@@ -135,7 +166,7 @@ function createEmbeddedEnv({ pageRate = 3, hasVideo = true } = {}) {
     { className: 'card', offsetHeight: 218, hidden: false, offsetParent: {}, style: { position: 'static', display: 'block' } },
   ];
   const document = {
-    documentElement: { style: rootStyle },
+    documentElement: root,
     body: { children: bodyChildren, offsetHeight: 218 },
     defaultView: { getComputedStyle: (n) => n.style },
     getElementById: (id) => elements.get(id) || null,
@@ -181,6 +212,7 @@ function createEmbeddedEnv({ pageRate = 3, hasVideo = true } = {}) {
     window: win,
     document,
     chrome,
+    localStorage: createLocalStorage(),
     location: { protocol: 'chrome-extension:' },
     // 高度上报里会用到 rAF；桩里同步执行，便于断言
     requestAnimationFrame: (fn) => { fn(); return 1; },
@@ -190,7 +222,7 @@ function createEmbeddedEnv({ pageRate = 3, hasVideo = true } = {}) {
   vm.runInContext(SRC, ctx, { filename: 'popup.js' });
 
   return {
-    elements, presets, rootStyle, sentMessages, sendTargets,
+    elements, presets, rootStyle, root, sentMessages, sendTargets,
     win, parent, posted,
     el: (id) => elements.get(id),
   };
@@ -490,13 +522,15 @@ const BV_TAB = { id: 1, url: 'https://www.bilibili.com/video/BV1AA411c7de' };
     );
     check('没有定义了却没用的令牌', unused, []);
 
-    // ---- 2. 颜色必须走令牌：:root 之外不许再散落硬编码色值 ----
-    // 只看 :root 之后的部分；那里只允许纯白/纯黑这类无色彩倾向的中性值
-    const afterTokens = CSS.slice(CSS.indexOf('}', CSS.indexOf(':root')) + 1);
+    // ---- 2. 颜色必须走令牌：规则里不许再散落硬编码色值 ----
+    // 令牌定义块（:root / :root[data-theme="dark"]）正是「把颜色收进令牌」的地方，
+    // 里面当然要写色值字面量。要守住的是这些块**之外**的规则。
+    const cssNoTokens = CSS.replace(
+      /(?:^|\n)[^\n{}]*(?::root|\[data-theme)[^\n{}]*\{[\s\S]*?\n\}/g, '');
     const stray = [...new Set(
-      [...afterTokens.matchAll(/#[0-9a-fA-F]{3,8}/g)].map((m) => m[0].toLowerCase()),
+      [...cssNoTokens.matchAll(/#[0-9a-fA-F]{3,8}/g)].map((m) => m[0].toLowerCase()),
     )].filter((c) => !['#fff', '#ffffff', '#0e1318'].includes(c));
-    check(':root 之外没有散落的硬编码色值（都走 var）', stray, []);
+    check('令牌定义块之外没有散落的硬编码色值（都走 var）', stray, []);
 
     // ---- 3. 滑块几何：圆钮必须正好在轨道中线上 ----
     const track = Number((CSS.match(/runnable-track\s*\{[\s\S]*?height:\s*(\d+)px/) || [])[1]);
@@ -538,6 +572,177 @@ const BV_TAB = { id: 1, url: 'https://www.bilibili.com/video/BV1AA411c7de' };
     // 提示行已删除：CSS 里那段 .status 规则也应该一并收掉，不留死样式
     check('CSS 里不再有 .status 规则', /^\.status\s*\{/m.test(CSS), false);
     check('CSS 里不再有 status-in 动画', /@keyframes status-in/.test(CSS), false);
+  }
+
+  console.log('\n[14] 设置界面：齿轮进入 / 「退出」返回，两屏互斥');
+  {
+    // ---- 结构：两个界面 + 两枚按钮都在 ----
+    for (const id of ['mainView', 'settingsView', 'settingsBtn', 'settingsExitBtn']) {
+      check(`存在 #${id}`, ids.includes(id), true);
+    }
+    check('#settingsView 初始 hidden（先显示倍速界面）',
+      /id="settingsView"[^>]*hidden/.test(HTML), true);
+    check('#settingsBtn 不初始 hidden（两个入口都要有设置入口）',
+      /id="settingsBtn"[^>]*hidden/.test(HTML), false);
+
+    // ---- 几何：设置键和「×」同尺寸，且贴在它正下方 ----
+    const size = (sel) => {
+      const rule = (CSS.match(new RegExp(`\\${sel}\\s*\\{[\\s\\S]*?\\n\\}`)) || [''])[0];
+      return [
+        (rule.match(/width:\s*(\d+)px/) || [])[1],
+        (rule.match(/height:\s*(\d+)px/) || [])[1],
+      ].join('x');
+    };
+    check('设置键与收起键同尺寸', size('.settings'), size('.close'));
+    check('设置键与收起键一样是圆形', /\.settings\s*\{[\s\S]*?border-radius:\s*50%/.test(CSS), true);
+    const closeTop = Number((CSS.match(/\.close\s*\{[\s\S]*?top:\s*(\d+)px/) || [])[1]);
+    const closeH = Number((CSS.match(/\.close\s*\{[\s\S]*?height:\s*(\d+)px/) || [])[1]);
+    const setTop = Number((CSS.match(/\.settings\s*\{[\s\S]*?top:\s*(\d+)px/) || [])[1]);
+    check('设置键在收起键下方（不重叠）', setTop >= closeTop + closeH, true);
+    check('设置键与收起键同一列（right 一致）',
+      (CSS.match(/\.settings\s*\{[\s\S]*?right:\s*(\d+)px/) || [])[1],
+      (CSS.match(/\.close\s*\{[\s\S]*?right:\s*(\d+)px/) || [])[1]);
+
+    // ---- 读数行要装得下纵向叠放的两枚图标键，否则会压到滑块 ----
+    // 坐标基准要对齐：.settings 的 top 从 body 的 padding box 起算，
+    // 而 .readout 的 min-height 从 .card 的 padding-top 之后才开始。
+    const cardPadTop = Number((CSS.match(/\.card\s*\{[\s\S]*?padding:\s*(\d+)px/) || [])[1]);
+    const readoutH = Number((CSS.match(/\.readout\s*\{[\s\S]*?min-height:\s*(\d+)px/) || [])[1]);
+    const readoutGap = Number((CSS.match(/\.readout\s*\{[\s\S]*?margin-bottom:\s*(\d+)px/) || [])[1]);
+    const iconsBottom = setTop + closeH;
+    check('读数行容得下两枚图标键',
+      cardPadTop + readoutH >= iconsBottom, true);
+    check('两枚图标键不会侵入滑块（留 ≥4px 余量）',
+      cardPadTop + readoutH + readoutGap - iconsBottom >= 4, true);
+
+    // ---- 交互：点齿轮进设置、点退出回主界面 ----
+    const env = createEnv({ tab: BV_TAB, pageRate: 2 });
+    await wait(30);
+    check('初始在倍速界面', [env.el('mainView').hidden, env.el('settingsView').hidden], [false, true]);
+
+    env.el('settingsBtn')._fire('click');
+    check('点齿轮 -> 只剩设置界面', [env.el('mainView').hidden, env.el('settingsView').hidden], [true, false]);
+    check('进入设置后齿轮收起（避免与「退出」重复）', env.el('settingsBtn').hidden, true);
+
+    env.el('settingsExitBtn')._fire('click');
+    check('点退出 -> 回到倍速界面', [env.el('mainView').hidden, env.el('settingsView').hidden], [false, true]);
+    check('退出后齿轮重新出现', env.el('settingsBtn').hidden, false);
+
+    // ---- 切屏不能碰倍速：来回切换不该下发任何命令 ----
+    const before = env.sentMessages.length;
+    env.el('settingsBtn')._fire('click');
+    env.el('settingsExitBtn')._fire('click');
+    await wait(120);
+    check('来回切屏不下发任何命令', env.sentMessages.length, before);
+    check('切屏后读数不变', env.el('rateValue').textContent, '2.00');
+
+    // ---- 内嵌面板里同样能用（外层「×」与齿轮互不干扰）----
+    const emb = createEmbeddedEnv({ pageRate: 1 });
+    emb.el('settingsBtn')._fire('click');
+    check('内嵌时也能进设置', emb.el('settingsView').hidden, false);
+    check('内嵌时「×」不受影响（仍由握手控制）', emb.el('closeBtn').hidden, true);
+    emb.el('settingsExitBtn')._fire('click');
+    check('内嵌时也能退出设置', emb.el('mainView').hidden, false);
+    check('退出设置不误发 panelClose',
+      emb.posted.filter((m) => m.type === 'bilispeed:panelClose').length, 0);
+  }
+
+  console.log('\n[15] 暗色模式：首帧不闪、开关可切换、偏好被记住');
+  {
+    const THEME_JS = fs.readFileSync(path.join(ROOT, 'theme.js'), 'utf8');
+    // 只检查代码本身：注释里会解释“为什么不用 chrome.storage”，那是说明不是实现
+    const THEME_CODE = THEME_JS
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+
+    // ---- 1. 引导脚本必须同步跑在 <head> 里，否则会先闪一帧浅色 ----
+    check('HTML 引了 theme.js', /<script src="theme\.js">/.test(HTML), true);
+    const head = HTML.slice(HTML.indexOf('<head>'), HTML.indexOf('</head>'));
+    check('theme.js 在 <head> 里', /<script src="theme\.js">/.test(head), true);
+    check('theme.js 用在样式表之前（属性先于上色就位）',
+      head.indexOf('theme.js') < head.indexOf('popup.css'), true);
+    check('theme.js 走同步的 localStorage', /localStorage/.test(THEME_CODE), true);
+    check('theme.js 不用异步的 chrome.storage（那会白闪）',
+      /chrome\.storage/.test(THEME_CODE), false);
+    check('theme.js 写 data-theme', /setAttribute\('data-theme'/.test(THEME_CODE), true);
+    check('theme.js 标出内嵌场景', /is-embedded/.test(THEME_CODE), true);
+
+    // 两个文件必须认同一个存储键，否则“记住偏好”会静默失效
+    const keyInTheme = (THEME_JS.match(/THEME_KEY\s*=\s*'([^']+)'/) || [])[1];
+    const keyInPopup = (SRC.match(/THEME_KEY\s*=\s*'([^']+)'/) || [])[1];
+    check('theme.js 与 popup.js 用同一个存储键', keyInTheme, keyInPopup);
+    check('存储键非空', Boolean(keyInTheme), true);
+
+    // ---- 2. 暗色令牌块：颜色都覆盖到了，且不引入浅色没有的新令牌 ----
+    const darkBlock = (CSS.match(/:root\[data-theme="dark"\]\s*\{[\s\S]*?\n\}/) || [''])[0];
+    check('CSS 里有暗色令牌块', darkBlock.length > 0, true);
+    const declaredIn = (block) => [...block.matchAll(/(--[\w-]+):/g)].map((m) => m[1]);
+    const darkTokens = declaredIn(darkBlock);
+    const lightTokens = declaredIn((CSS.match(/(?:^|\n):root\s*\{[\s\S]*?\n\}/) || [''])[0]);
+
+    for (const t of ['--brand', '--brand-deep', '--brand-soft', '--brand-line',
+      '--text', '--text-mid', '--text-soft', '--text-faint',
+      '--surface', '--surface-sunken', '--line', '--line-strong', '--shadow-flat']) {
+      check(`暗色覆盖了 ${t}`, darkTokens.includes(t), true);
+    }
+    check('暗色没有自造浅色不存在的令牌',
+      darkTokens.filter((t) => !lightTokens.includes(t)), []);
+
+    // ---- 3. 内嵌时给 <html> 铺底色，盖掉 floating.js 垫的浅色底 ----
+    check('暗色 + 内嵌时 <html> 铺满底色',
+      /:root\[data-theme="dark"\]\.is-embedded\s*\{[\s\S]*?background:\s*var\(--surface\)/.test(CSS), true);
+    check('工具栏弹窗四角仍保持透明（不能铺底）',
+      /html,\s*body\s*\{[\s\S]*?background:\s*transparent/.test(CSS), true);
+
+    // 滑块圆钮的底色环不能再写死白色，否则暗色下会糊一圈白光
+    check('圆钮底色环跟随令牌而非写死白色',
+      /slider-thumb\s*\{[\s\S]*?color-mix\(in srgb, var\(--surface\)/.test(CSS), true);
+
+    // ---- 4. 开关：默认浅色，能切到暗色并记住 ----
+    const env = createEnv({ tab: BV_TAB, pageRate: 1 });
+    await wait(30);
+    check('开关在设置界面里', /id="settingsView"[\s\S]*id="darkModeToggle"/.test(HTML), true);
+    check('默认浅色', env.root.getAttribute('data-theme'), 'light');
+    check('开关默认是关的', env.el('darkModeToggle').checked, false);
+
+    env.el('darkModeToggle').checked = true;
+    env.el('darkModeToggle')._fire('change');
+    check('打开开关 -> <html> 变 dark', env.root.getAttribute('data-theme'), 'dark');
+    check('打开开关 -> 偏好落盘', env.store.getItem('bilispeed.theme'), 'dark');
+
+    env.el('darkModeToggle').checked = false;
+    env.el('darkModeToggle')._fire('change');
+    check('关掉开关 -> 回到 light', env.root.getAttribute('data-theme'), 'light');
+    check('关掉开关 -> 偏好更新', env.store.getItem('bilispeed.theme'), 'light');
+
+    // 下次打开：theme.js 读到的就是这个值，开关状态也要跟着对上
+    const persisted = createEnv({ tab: BV_TAB, pageRate: 1, theme: 'dark' });
+    await wait(30);
+    check('记住的暗色在下次打开时生效', persisted.root.getAttribute('data-theme'), 'dark');
+    check('下次打开时开关自动是开的', persisted.el('darkModeToggle').checked, true);
+
+    // 存储里是脏值时退回浅色，而不是崩掉
+    const dirty = createEnv({ tab: BV_TAB, pageRate: 1, theme: 'rainbow' });
+    await wait(30);
+    check('存储里的脏值退回浅色', dirty.root.getAttribute('data-theme'), 'light');
+
+    // 切主题不该碰倍速
+    const before = env.sentMessages.length;
+    env.el('darkModeToggle').checked = true;
+    env.el('darkModeToggle')._fire('change');
+    await wait(120);
+    check('切主题不下发任何倍速命令', env.sentMessages.length, before);
+
+    // ---- 5. 开关几何：圆钮要正好走到轨道另一端 ----
+    const switchW = Number((CSS.match(/\.switch\s*\{[\s\S]*?width:\s*(\d+)px/) || [])[1]);
+    const knobW = Number((CSS.match(/\.switch::after\s*\{[\s\S]*?width:\s*(\d+)px/) || [])[1]);
+    const inset = Number((CSS.match(/\.switch::after\s*\{[\s\S]*?left:\s*(\d+)px/) || [])[1]);
+    const travel = Number((CSS.match(/\.switch:checked::after\s*\{[\s\S]*?translateX\((-?\d+)px\)/) || [])[1]);
+    check('开关行程算得对（含 1px 描边）',
+      travel, switchW - 2 * 1 - 2 * inset - knobW);
+    check('开关有键盘焦点环', /\.switch:focus-visible/.test(CSS), true);
+    check('开关与标签用 for 关联（点文字也能切）',
+      /<label class="setting-name" for="darkModeToggle">/.test(HTML), true);
   }
 
   console.log(`\n结果：${pass} 通过 / ${fail} 失败\n`);

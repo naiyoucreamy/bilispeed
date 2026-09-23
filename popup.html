@@ -2,6 +2,8 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
+  <!-- 主题必须在首次绘制前定下来，所以放在 head 里同步跑，见 theme.js -->
+  <script src="theme.js"></script>
   <title>BiliSpeed</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
@@ -10,7 +12,12 @@
        经由 popup.js 控制，所以浏览器工具栏弹窗里不会显示 -->
   <button id="closeBtn" class="close" type="button" aria-label="收起面板" title="收起" hidden>×</button>
 
-  <main class="card">
+  <!-- 设置按钮：贴在收起按钮正下方、同尺寸的圆形图标键。
+       它两个入口（工具栏弹窗 / 页面悬浮面板）都显示，点了切到设置界面，
+       由 popup.js 控制 -->
+  <button id="settingsBtn" class="settings" type="button" aria-label="设置" title="设置">⚙</button>
+
+  <main class="card" id="mainView">
     <!-- 当前速度：数字大号显示，右上角是快捷微调 -->
     <div class="readout">
       <output id="rateText" class="rate" for="rateSlider"><span id="rateValue">1.00</span><span class="rate-unit">x</span></output>
@@ -47,6 +54,21 @@
     </div>
 
     <button id="resetBtn" class="reset" type="button">重置为 1x</button>
+  </main>
+
+  <!-- 设置界面：与倍速主界面互斥显示（靠 popup.js 切 hidden），
+       右上角的「退出」回到倍速主界面 -->
+  <main class="card" id="settingsView" hidden>
+    <div class="settings-top">
+      <h1 class="settings-title">设置</h1>
+      <button id="settingsExitBtn" class="exit" type="button">退出</button>
+    </div>
+
+    <!-- 外观：关 = 现在这份浅色，开 = 暗色模式 -->
+    <div class="setting-row">
+      <label class="setting-name" for="darkModeToggle">暗色模式</label>
+      <input id="darkModeToggle" class="switch" type="checkbox" />
+    </div>
   </main>
 
   <script src="popup.js"></script>
