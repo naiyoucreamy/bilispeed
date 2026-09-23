@@ -6,9 +6,9 @@
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <header class="head">
-    <span class="brand">Bili<em>Speed</em></span>
-  </header>
+  <!-- 收起按钮只在“被页面悬浮按钮以内嵌面板打开”时出现，浮在面板右上角；
+       经由 popup.js 控制，所以浏览器工具栏弹窗里不会显示 -->
+  <button id="closeBtn" class="close" type="button" aria-label="收起面板" title="收起" hidden>×</button>
 
   <main class="card">
     <!-- 当前速度：数字大号显示，右上角是快捷微调 -->
@@ -48,9 +48,6 @@
 
     <button id="resetBtn" class="reset" type="button">重置为 1x</button>
   </main>
-
-  <!-- 仅在需要提示时出现（非 B 站页面、页面未就绪等） -->
-  <p id="status" class="status" role="status" hidden></p>
 
   <script src="popup.js"></script>
 </body>

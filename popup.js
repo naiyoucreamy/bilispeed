@@ -13,6 +13,12 @@
  *   2. 页面上的 content script 尚未就绪时（刚装扩展、页面没刷新），
  *      用 scripting 兜底直接设一遍当前 video 的 playbackRate
  *
+ * 这份界面有两个入口，但只有一套代码：
+ *   · 浏览器工具栏的扩展图标（原生弹窗）
+ *   · 页面右下角的悬浮按钮（floating.js 用 iframe 加载同一个 popup.html）
+ * 唯一的差别是 iframe 里拿不到可信的“当前标签页 URL/权限”，
+ * 所以 isEmbedded() 为真时跳过那一步，直接把能力判定视为成立。
+ *
  * 界面原则：只显示用户需要的信息。当前速度、常用档位、重置。
  * 不显示任何内部标识（标签页号、存储键、实现细节）。
  */
@@ -39,16 +45,19 @@ const statusEl = document.getElementById('status');
 const resetBtn = document.getElementById('resetBtn');
 const minusBtn = document.getElementById('minusBtn');
 const plusBtn = document.getElementById('plusBtn');
+const closeBtn = document.getElementById('closeBtn');
 const presetButtons = Array.from(document.querySelectorAll('.preset'));
 
 /* ---------------------------- 状态 ---------------------------- */
 
 /** 当前标签页的速度 */
 let uiRate = DEFAULT_RATE;
-/** 当前标签页的 id（仅用于发消息，不显示给用户） */
+/** 当前标签页的 id（仅用于发消息，不显示给用户；悬浮按钮内嵌打开时为 null） */
 let tabId = null;
 /** 是否可操作（B 站标签页） */
 let operable = false;
+/** 是否由页面悬浮按钮以 iframe 方式打开（此时走“当前窗口活动标签页”投递） */
+let embedded = false;
 /** content script 是否就绪 */
 let contentReady = false;
 
@@ -57,6 +66,23 @@ let pendingRate = null;
 let hintTimer = null;
 /** 初始化期间用户已经操作过，就不再用异步结果覆盖 UI */
 let userTouched = false;
+/**
+ * 内嵌打开时，面板里的「×」要怎么关掉面板。
+ * 扩展页面不能自己把自己所在的 iframe 收起来，所以由外层的 floating.js
+ * 通过 postMessage 接管；这里只负责在需要时把它显示出来。
+ */
+let closePanel = null;
+/** 上报高度用的 ResizeObserver（只挂一次） */
+let heightObserver = null;
+
+/**
+ * 现在能不能把速度发出去。
+ * 工具栏弹窗有确定的 tabId；悬浮按钮内嵌打开时没有 tabId，
+ * 但仍然可以按“当前窗口的活动标签页”投递，所以这里是两个条件的并集。
+ */
+function canSend() {
+  return embedded || tabId !== null;
+}
 
 /* ---------------------------- 工具 ---------------------------- */
 
@@ -104,17 +130,24 @@ function accentFor(rate) {
 }
 
 /**
- * 显示一条提示（只在需要时出现）
- * @param {string} text
+ * 提示通道。
+ * 界面上已经不再有那行提示文字（用户要求删掉），所以这里保留成空实现：
+ * 调用点还有好几处（非 B 站页面、页面没注入、本页没有视频、兜底注入失败），
+ * 它们表达的是“当前不可用/需要注意”，删掉调用会让这些情况彻底无声无息。
+ * 现在统一降级成“什么都不显示”，但**必须容忍 statusEl 不存在**，
+ * 否则一旦有人把这些调用恢复，会立刻抛 TypeError。
+ *
+ * @param {string} text 提示内容（当前不展示，保留语义）
  * @param {boolean} [persistent] 为 true 时不自动消失
  */
 function showHint(text, persistent = false) {
+  if (!statusEl) return; // 界面里没有提示元素，静默即可
   statusEl.textContent = text;
   statusEl.hidden = false;
   if (hintTimer !== null) clearTimeout(hintTimer);
   if (!persistent) {
     hintTimer = setTimeout(() => {
-      statusEl.hidden = true;
+      if (statusEl) statusEl.hidden = true;
       hintTimer = null;
     }, HINT_MS);
   }
@@ -126,7 +159,7 @@ function hideHint() {
     clearTimeout(hintTimer);
     hintTimer = null;
   }
-  statusEl.hidden = true;
+  if (statusEl) statusEl.hidden = true;
 }
 
 /** 同步所有 UI 元素 */
@@ -173,8 +206,110 @@ function isBilibiliTab(tab) {
 }
 
 /**
+ * 本页面是否被页面内的悬浮按钮以 iframe 方式加载。
+ * 悬浮按钮（floating.js）就是把这份 popup.html 塞进一个 iframe 里，
+ * 所以此时不必也不该再去问“当前是哪个标签页”：
+ *   - 外层页面本身就是 B 站页面，能力判断直接成立；
+ *   - 有没有 tabs 权限都不影响（query 拿不到 url 时会误判成“非 B 站页面”）。
+ * @returns {boolean}
+ */
+function isEmbedded() {
+  try {
+    if (window.top === window) return false;
+    return typeof location !== 'undefined' && location.protocol === 'chrome-extension:';
+  } catch (err) {
+    return false;
+  }
+}
+
+/**
+ * 内嵌打开时，接上和外层（floating.js）的握手链路。
+ *
+ * 外层会先发一条 bilispeed:panelHello 过来，我们据此：
+ *   1. 记住它的来源，点「×」时回 panelClose 请它收起；
+ *   2. 显示「×」（所以工具栏弹窗里不会出现它）。
+ *
+ * 注意：高度上报**不依赖**这条 hello（见 init 里的 reportPanelHeight）——
+ * hello 是外层发的，万一时序错开就会漏掉；高度是「谁量谁报」更可靠。
+ */
+function bindPanelClose() {
+  if (typeof window.addEventListener !== 'function') return;
+  window.addEventListener('message', (event) => {
+    const data = event && event.data;
+    if (!data || data.type !== 'bilispeed:panelHello') return;
+    if (event.source !== window.parent) return; // 只认外层页面
+    const target = event.source;
+    closePanel = () => {
+      try {
+        target.postMessage({ type: 'bilispeed:panelClose' }, '*');
+      } catch (err) {
+        /* 发不出去就算了，外层还有“点别处收起”兜底 */
+      }
+    };
+    if (closeBtn) closeBtn.hidden = false;
+    reportPanelHeight(target); // 补报一次，双保险
+  });
+}
+
+/**
+ * 量出本页内容的真实高度并上报给外层（floating.js），让它把面板高度调到刚好。
+ * 用 body 在文档流里的直接子元素高度累加（实际就是 .card）；
+ * 以后若再加可见区块，这里会自动算进来，不用改代码。
+ * @param {Window} target 外层窗口
+ */
+function reportPanelHeight(target) {
+  /**
+   * 这个子元素是否占据布局高度。
+   * 注意：不能用 offsetParent === null 来判断绝对定位 ——
+   * body 是 position:relative，「#closeBtn」是 position:absolute，
+   * 它的 offsetParent 正好是 body（非 null），会被误算成 19px 高度。
+   * 所以这里显式看计算后的 position。
+   */
+  const takesHeight = (child) => {
+    const view = document.defaultView;
+    if (view && typeof view.getComputedStyle === 'function') {
+      const style = view.getComputedStyle(child);
+      if (style.display === 'none') return false;
+      if (style.position === 'absolute' || style.position === 'fixed') return false;
+    }
+    if (child.hidden) return false;
+    return true;
+  };
+
+  const send = () => {
+    let height = 0;
+    for (const child of document.body.children) {
+      if (!takesHeight(child)) continue;
+      height += child.offsetHeight;
+    }
+    if (height < 40) return; // 还没排版好
+    try {
+      target.postMessage({ type: 'bilispeed:panelHeight', height }, '*');
+    } catch (err) {
+      /* 报不上去就维持外层的默认高度 */
+    }
+  };
+
+  // 先报一次（等一帧确保布局稳定），之后内容变化时继续报
+  const raf = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame
+    : (fn) => setTimeout(fn, 0);
+  raf(() => {
+    send();
+    // 状态提示出现/消失、速度数字变宽等都会改变高度
+    // （只挂一次，避免重复上报时叠加多个 observer）
+    if (!heightObserver && typeof window.ResizeObserver === 'function') {
+      heightObserver = new window.ResizeObserver(send);
+      heightObserver.observe(document.body);
+    }
+  });
+}
+
+/**
  * 给当前标签页的 content script 发消息，带超时。
  * 超时 / 无接收方返回 null。
+ * id 为 null（悬浮按钮内嵌打开时）就退回“当前窗口的活动标签页”，
+ * 那条消息同样会落到这个标签页的 content script 上。
  * @returns {Promise<any|null>}
  */
 function sendToTab(id, message) {
@@ -188,15 +323,32 @@ function sendToTab(id, message) {
     };
     const timer = setTimeout(() => finish(null), MESSAGE_TIMEOUT_MS);
 
-    try {
-      chrome.tabs.sendMessage(id, message, (response) => {
-        // 读取 lastError 吞掉 “Receiving end does not exist” 之类的报错
-        void chrome.runtime.lastError;
-        finish(response === undefined ? null : response);
-      });
-    } catch (err) {
-      finish(null);
+    const deliver = (target) => {
+      try {
+        chrome.tabs.sendMessage(target, message, (response) => {
+          // 读取 lastError 吞掉 “Receiving end does not exist” 之类的报错
+          void chrome.runtime.lastError;
+          finish(response === undefined ? null : response);
+        });
+      } catch (err) {
+        finish(null);
+      }
+    };
+
+    if (id !== null && id !== undefined) {
+      deliver(id);
+      return;
     }
+    // 内嵌打开时没有能力（也不需要）拿到 tabId，交给 Chrome 自己找
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      void chrome.runtime.lastError;
+      const active = tabs && tabs[0];
+      if (!active || typeof active.id !== 'number') {
+        finish(null);
+        return;
+      }
+      deliver(active.id);
+    });
   });
 }
 
@@ -246,7 +398,7 @@ async function flushSend() {
   const rate = pendingRate;
   pendingRate = null;
 
-  if (tabId === null) return;
+  if (!canSend()) return;
 
   const res = await sendToTab(tabId, { type: 'bilispeed:set', rate });
   if (res && res.ok) {
@@ -256,8 +408,9 @@ async function flushSend() {
   }
 
   // content script 没响应：兜底直接注入设置
+  // （内嵌打开时没有确定的 tabId，说明是脚本本身没就绪，刷新提示由 init 负责）
   const injected = await injectRate(tabId, rate);
-  showHint(injected ? '刷新一下页面即可长期生效' : '这个页面暂时无法调速，刷新后重试');
+  if (!embedded) showHint(injected ? '刷新一下页面即可长期生效' : '这个页面暂时无法调速，刷新后重试');
 }
 
 /** 重置为 1x */
@@ -265,14 +418,14 @@ async function resetRate() {
   userTouched = true;
   uiRate = DEFAULT_RATE;
   render();
-  if (tabId === null) return;
+  if (!canSend()) return;
   const res = await sendToTab(tabId, { type: 'bilispeed:reset' });
   if (res && res.ok) {
     hideHint();
     return;
   }
   const injected = await injectRate(tabId, DEFAULT_RATE);
-  if (!injected) showHint('这个页面暂时无法调速，刷新后重试');
+  if (!injected && !embedded) showHint('这个页面暂时无法调速，刷新后重试');
 }
 
 /**
@@ -326,6 +479,13 @@ for (const btn of presetButtons) {
   });
 }
 
+// 内嵌面板里的「×」：请外层把面板收起来（工具栏弹窗里它是隐藏的）
+if (closeBtn) {
+  closeBtn.addEventListener('click', () => {
+    if (closePanel) closePanel();
+  });
+}
+
 // PageUp / PageDown 快速跳档（←/→ 由原生 range 处理）
 document.addEventListener('keydown', (event) => {
   if (event.key === 'PageUp') {
@@ -344,18 +504,27 @@ document.addEventListener('keydown', (event) => {
 async function init() {
   render();
 
-  const tab = await getActiveTab();
-  if (!tab || !isBilibiliTab(tab)) {
+  embedded = isEmbedded();
+  // 内嵌时接上「×」的链路，并**立刻**上报高度：
+  // 不依赖外层的 hello（那条消息万一时序错开就会漏），谁量谁报最可靠。
+  if (embedded) {
+    bindPanelClose();
+    if (window.parent && window.parent !== window) reportPanelHeight(window.parent);
+  }
+
+  const tab = embedded ? null : await getActiveTab();
+  if (!embedded && (!tab || !isBilibiliTab(tab))) {
     operable = false;
     render();
     showHint('打开一个 B 站视频后即可使用', true);
     return;
   }
 
-  tabId = tab.id;
+  // 由页面悬浮按钮打开时，当前标签页就是外层 B 站标签页
+  tabId = embedded ? null : tab.id;
   operable = true;
 
-  // 读取当前标签页的速度
+  // 读取当前标签页的速度：内嵌时由 content script 用 sender.tab.id 自己认领
   const state = await sendToTab(tabId, { type: 'bilispeed:get' });
   contentReady = Boolean(state && state.ok);
 

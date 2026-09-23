@@ -18,6 +18,19 @@
       "js": ["content.js"],
       "run_at": "document_start",
       "all_frames": false
+    },
+    {
+      "matches": ["*://*.bilibili.com/*"],
+      "js": ["floating.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": ["popup.html", "popup.css"],
+      "matches": ["*://*.bilibili.com/*"]
     }
   ],
 

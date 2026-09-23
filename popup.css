@@ -1,47 +1,88 @@
 /* ============================================================
    BiliSpeed popup 样式
-   纯 CSS / 无框架。视觉重点：一眼能看清当前速度，拖起来顺手。
+   纯 CSS / 无框架。视觉重点：一眼看清当前速度，拖起来顺手。
+
+   结构（不要改，功能与 JS 强相关）：
+     body            <- 面板本体：圆角 / 描边 / 底色都画在这里
+       #closeBtn     <- 内嵌面板时才出现的收起按钮（绝对定位）
+       main.card     <- 内容区，只负责内边距
+         .readout    <- 读数 + 加减键
+         .slider     <- 滑块
+         .scale      <- 刻度
+         .presets    <- 档位（8 个）
+         .reset      <- 重置
    ============================================================ */
 
 :root {
-  /* 品牌色（跟随 B 站天蓝色系） */
+  /* ---------------- 品牌色（跟随 B 站天蓝色系） ---------------- */
   --brand: #00a1d6;
   --brand-deep: #0b7fa8;
+  --brand-soft: #e8f6fd;   /* 悬停底色 */
+  --brand-line: #bfe4f3;   /* 悬停描边 */
 
-  /* 文字层级 */
-  --text: #0f1419;
-  --text-soft: #5b6672;
-  --text-faint: #99a2ad;
+  /* ---------------- 文字层级（4 级，不再临时造色） ---------------- */
+  --text: #0e1318;
+  --text-mid: #46525f;
+  --text-soft: #6b7683;
+  --text-faint: #9aa4b0;
 
-  /* 表面与描边 */
+  /* ---------------- 表面与描边 ---------------- */
   --surface: #ffffff;
-  --line: #e9edf2;
-  --line-strong: #d7dee7;
+  --surface-sunken: #f4f6f9;  /* 按钮默认底 */
+  --line: #e8ecf1;
+  --line-strong: #d5dce5;
 
-  /* 滑块当前进度色，由 JS 按速度值写入 */
+  /* ---------------- 滑块进度色，由 JS 按速度值写入 ---------------- */
   --accent: var(--brand);
+  --fill: 5%;
 
-  --radius-lg: 16px;
-  --radius-md: 11px;
-  --radius-sm: 9px;
+  /* ---------------- 圆角：整体调大，观感更柔和 ---------------- */
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 12px;
+  --radius-pill: 999px;
+
+  /* ---------------- 投影：两层够用，不再层层叠加 ---------------- */
+  /* 静置：几乎看不见，只用来把元素从底上“抬”起来一点点 */
+  --shadow-flat: 0 1px 2px rgba(16, 24, 40, 0.05);
+  /* 强调（选中档位）：带品牌色的彩色投影 */
+  --shadow-accent: 0 3px 9px -3px color-mix(in srgb, var(--accent) 62%, transparent);
+
+  /* ---------------- 缓动 ---------------- */
+  --ease: cubic-bezier(0.32, 0.72, 0.3, 1);
+  --dur: 0.15s;
 }
 
 * {
   box-sizing: border-box;
 }
 
+/* ------------------------------------------------------------
+   最外层一律透明：能看见的“面板”只有中间那张圆角卡片。
+   body 自己带 background + padding 时，卡片比 body 小一圈，
+   露出来的那圈方形底色就会变成「白色边框」——所以这里把
+   html / body 的底色、margin、padding 全部清掉，
+   改成「整块 body 就是那张卡片」：圆角、描边、底色都画在 body 上，
+   四角之外直接透明，不再有任何方形底色露出来。
+   ------------------------------------------------------------ */
+
 html,
 body {
   margin: 0;
+  padding: 0;
+  background: transparent;
 }
 
 body {
-  width: 300px;
-  padding: 14px 14px 12px;
-  background:
-    radial-gradient(120% 90% at 12% -10%, #eaf7fd 0%, rgba(234, 247, 253, 0) 62%),
-    radial-gradient(100% 80% at 100% 0%, #f3f0ff 0%, rgba(243, 240, 255, 0) 55%),
-    #fbfcfd;
+  /* 宽度 = 内容 270px + 左右各 13px 内边距 */
+  width: 296px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-flat);
+  /* 圆角处裁掉子元素溢出，避免方形内容在圆角外露头 */
+  overflow: hidden;
+  position: relative;
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   font-size: 13px;
@@ -50,147 +91,195 @@ body {
   user-select: none;
 }
 
-/* ---------------- 顶部品牌 ---------------- */
-
-.head {
+/* ---------------- 收起按钮（只在内嵌面板里出现） ----------------
+   绝对定位在右上角：不占布局、不给面板挤出“多余的一行”。
+   平时淡得几乎看不见，鼠标移到面板上才显形。 */
+.close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
   display: flex;
   align-items: center;
-  margin: 0 0 10px 2px;
-}
-
-.brand {
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  padding: 0 0 1px;
   font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  color: var(--brand-deep);
-}
-
-.brand em {
-  font-style: normal;
-  color: var(--text);
-}
-
-/* ---------------- 主卡片 ---------------- */
-
-.card {
-  padding: 16px 16px 14px;
+  line-height: 1;
+  color: var(--text-faint);
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow:
-    0 1px 2px rgba(16, 24, 40, 0.04),
-    0 12px 28px -14px rgba(16, 24, 40, 0.18);
+  border: 1px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease),
+    background var(--dur) var(--ease), border-color var(--dur) var(--ease), transform 0.1s var(--ease);
 }
 
-/* ---------------- 速度读数 ---------------- */
+.close[hidden] {
+  display: none;
+}
+
+body:hover .close,
+.close:focus-visible {
+  opacity: 1;
+}
+
+.close:hover {
+  color: var(--text-mid);
+  background: var(--surface-sunken);
+  border-color: var(--line);
+}
+
+.close:active {
+  transform: scale(0.9);
+}
+
+.close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* ---------------- 内容区：只是一层内边距，不是第二张卡片 ----------------
+   圆角 / 描边 / 底色已经提到 body 上了，所以这里必须清掉自己的
+   background / border / radius / shadow，否则又会出现“卡片套卡片”。 */
+.card {
+  padding: 13px 13px 11px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ============================================================
+   速度读数：整块面板的视觉重心
+   数字用强调色 + 等宽数字，单位弱化；右侧加减键作为精调
+   ============================================================ */
 
 .readout {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 9px;
 }
 
 .rate {
   display: flex;
   align-items: baseline;
-  font-size: 40px;
+  /* 数字本身的“视觉重量”由字重和字距撑起来，而不是一味放大 */
+  font-size: 34px;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: -1px;
+  letter-spacing: -1.2px;
   font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
   color: var(--accent);
-  transition: color 0.18s ease;
+  transition: color 0.2s var(--ease);
 }
 
 .rate-unit {
-  margin-left: 1px;
-  font-size: 19px;
+  margin-left: 2px;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: 0;
-  opacity: 0.55;
+  opacity: 0.5;
 }
 
-/* 加减 0.25 */
+/* 加减 0.25：两个小方块，悬停泛品牌色 */
 .stepper {
   display: flex;
-  gap: 6px;
+  gap: 5px;
 }
 
 .step {
-  width: 32px;
-  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1;
   color: var(--text-soft);
-  background: #f5f7fa;
-  border: 1px solid var(--line);
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease, transform 0.1s ease;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), transform 0.1s var(--ease);
 }
 
 .step:hover:not(:disabled) {
   color: var(--brand-deep);
-  background: #e9f6fc;
-  border-color: #bfe4f3;
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
 }
 
 .step:active:not(:disabled) {
-  transform: scale(0.94);
+  transform: scale(0.92);
 }
 
-/* ---------------- 滑块 ---------------- */
+.step:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* ============================================================
+   滑块：轨道填充色 = 当前速度色，圆钮带一圈白环加强对比
+   ============================================================ */
 
 .slider {
   -webkit-appearance: none;
   appearance: none;
   display: block;
   width: 100%;
-  height: 30px;
-  margin: 2px 0 0;
+  height: 22px;
+  margin: 0;
   background: transparent;
   cursor: pointer;
 }
 
-/* 轨道：已填充部分用当前速度色，未填充为浅灰 */
 .slider::-webkit-slider-runnable-track {
-  height: 8px;
-  border-radius: 999px;
-  background:
-    linear-gradient(90deg, var(--accent) 0 var(--fill, 5%), var(--line) var(--fill, 5%) 100%);
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0 var(--fill),
+    var(--line) var(--fill) 100%
+  );
 }
 
-/* 滑块圆钮 */
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 20px;
-  height: 20px;
-  margin-top: -6px;
+  width: 17px;
+  height: 17px;
+  margin-top: -5px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--surface);
   border: 2px solid var(--accent);
+  /* 白环让圆钮压在彩条上也看得清 */
   box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 0.9),
-    0 2px 6px rgba(16, 24, 40, 0.22);
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+    0 0 0 3px rgba(255, 255, 255, 0.92),
+    0 1px 3px rgba(16, 24, 40, 0.2);
+  transition: transform 0.12s var(--ease), box-shadow 0.12s var(--ease);
 }
 
 .slider:hover::-webkit-slider-thumb {
-  transform: scale(1.06);
+  transform: scale(1.08);
 }
 
 .slider:active::-webkit-slider-thumb {
-  transform: scale(1.14);
+  transform: scale(1.16);
   box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 0.95),
-    0 4px 12px rgba(16, 24, 40, 0.26);
+    0 0 0 3px rgba(255, 255, 255, 0.96),
+    0 3px 9px rgba(16, 24, 40, 0.24);
 }
 
+/* 键盘操作时才显示焦点环，鼠标点击不出环 */
 .slider:focus-visible {
   outline: none;
 }
@@ -198,93 +287,121 @@ body {
 .slider:focus-visible::-webkit-slider-thumb {
   box-shadow:
     0 0 0 3px rgba(255, 255, 255, 1),
-    0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent),
-    0 2px 6px rgba(16, 24, 40, 0.22);
+    0 0 0 6px color-mix(in srgb, var(--accent) 32%, transparent),
+    0 1px 3px rgba(16, 24, 40, 0.2);
 }
 
-/* 刻度说明 */
+/* 刻度：起点/中点/终点，弱到几乎只是暗示 */
 .scale {
   display: flex;
   justify-content: space-between;
-  margin-top: 2px;
-  font-size: 10px;
+  margin-top: 0;
+  padding: 0 1px;
+  font-size: 9.5px;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
 }
 
-/* ---------------- 常用档位 ---------------- */
+/* ============================================================
+   常用档位：一行 5 个，8 个档位排成 5 + 3 两行
+   未选中 = 浅灰底；选中 = 实心强调色 + 彩色投影
+   ============================================================ */
 
 .presets {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-  margin: 14px 0 12px;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 5px;
+  margin: 10px 0 9px;
 }
 
 .preset {
-  padding: 7px 0;
-  font-size: 11.5px;
+  padding: 6px 0;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text-soft);
-  background: #f5f7fa;
+  background: var(--surface-sunken);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-variant-numeric: tabular-nums;
-  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease, transform 0.1s ease;
+  letter-spacing: 0.1px;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), transform 0.1s var(--ease);
 }
 
 .preset:hover:not(:disabled) {
   color: var(--brand-deep);
-  background: #e9f6fc;
-  border-color: #bfe4f3;
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
 }
 
 .preset:active:not(:disabled) {
-  transform: scale(0.96);
+  transform: scale(0.95);
 }
 
-/* 当前档位：实心强调 */
+.preset:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* 当前档位：实心强调 + 彩色投影，一眼看出“现在是这个速度” */
 .preset.is-active {
   color: #fff;
   font-weight: 600;
   background: var(--accent);
   border-color: transparent;
-  box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow: var(--shadow-accent);
 }
 
-/* ---------------- 重置 ---------------- */
+.preset.is-active:hover:not(:disabled) {
+  color: #fff;
+  background: var(--accent);
+  border-color: transparent;
+}
+
+/* ============================================================
+   重置：次级动作，用描边而不是实心，避免和档位抢注意力
+   ============================================================ */
 
 .reset {
   width: 100%;
-  padding: 9px 0;
-  font-size: 12.5px;
+  padding: 8px 0;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-soft);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: color 0.14s ease, border-color 0.14s ease, background 0.14s ease, transform 0.1s ease;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease), transform 0.1s var(--ease);
 }
 
 .reset:hover:not(:disabled) {
   color: var(--brand-deep);
   border-color: var(--brand);
-  background: #f2fafd;
+  background: var(--brand-soft);
 }
 
 .reset:active:not(:disabled) {
   transform: scale(0.985);
 }
 
-/* ---------------- 禁用态 ---------------- */
+.reset:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* ============================================================
+   禁用态：非 B 站页面 / 页面未就绪时整体变淡，且不响应悬停
+   ============================================================ */
 
 .step:disabled,
 .preset:disabled,
 .reset:disabled,
 .slider:disabled {
-  opacity: 0.42;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -292,34 +409,16 @@ body {
 .preset:disabled:hover,
 .reset:disabled:hover {
   color: var(--text-soft);
-  background: #f5f7fa;
-  border-color: var(--line);
+  background: var(--surface-sunken);
+  border-color: transparent;
 }
 
-/* ---------------- 状态提示（只在需要时出现） ---------------- */
-
-.status {
-  margin: 10px 2px 0;
-  font-size: 11.5px;
-  color: var(--text-soft);
-  text-align: center;
-  animation: status-in 0.18s ease;
-}
-
-.status[hidden] {
-  display: none;
-}
-
-@keyframes status-in {
-  from {
-    opacity: 0;
-    transform: translateY(-2px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
+/* ============================================================
+   提示行已按需求删除
+   原来这里有一条 #status（“本页还没有开始播放视频”等），现在界面上不显示。
+   popup.js 里的 showHint()/hideHint() 保留为空实现（调用点仍在，
+   用于表达“当前不可用”的语义），但已经没有任何可见样式了。
+   ============================================================ */
 
 /* 尊重“减少动态效果”的系统设置 */
 @media (prefers-reduced-motion: reduce) {
