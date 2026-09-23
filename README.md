@@ -28,16 +28,28 @@
 - 收起靠面板右上角的「×」（平时隐形，鼠标移到面板上才显形），也可以点按钮 / 点页面别处 / 按 Esc / 切走标签页
 - 视频进入全屏时按钮自动隐藏，退出全屏恢复
 
+## 本地化（商店语言识别）
+
+扩展名和描述走 `_locales` 本地化，不再写死在 manifest 里：
+
+- `manifest.json`：`"default_locale": "zh_CN"`，`name` / `description` 用 `__MSG_extName__` / `__MSG_extDesc__`
+- `_locales/zh_CN/messages.json`：`extName` = `BiliSpeed`，`extDesc` = `B站自定义倍速`
+
+商店后台（Partner Center）判定扩展支持哪些语言，靠的就是这份 `__MSG_` 引用 + 对应语言包；
+如果 manifest 里是写死的中文，后台只会识别出 `en-US`。
+
 ## 自测（不需要浏览器）
 
 ```bash
 node tests/content.test.js     # 倍速逻辑：按标签页隔离、刷新恢复、SPA 跳转
 node tests/popup-ui.test.js    # 弹窗界面与下发流程（含悬浮面板内嵌打开的场景）
-node tests/floating.test.js    # 悬浮按钮：清单注册、开关面板、边界情况
+node tests/floating.test.js    # 悬浮按钮：清单注册、开关面板、本地化词条、边界情况
 ```
 
 > 注意：自测目录必须叫 `tests`，不能叫 `_test` —— Chrome 不允许扩展目录里出现以
 > 下划线开头的文件或目录（`Filenames starting with "_" are reserved for use by the system`），
 > 否则扩展会直接加载失败。`tests/floating.test.js` 里有一条断言专门守着这个坑。
+>
+> 唯一的例外是 `_locales`：浏览器官方保留的本地化目录，必须叫这个名字，断言里已放行。
 
 

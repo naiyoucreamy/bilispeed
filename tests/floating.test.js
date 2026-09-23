@@ -255,16 +255,21 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     // Chrome 报错原文：Cannot load extension with file or directory name _test.
     // Filenames starting with "_" are reserved for use by the system.
     // 所以自测目录必须是 tests，任何 “_” 开头的名字都不能出现在扩展目录里。
+    // 唯一例外是 _locales：它是浏览器官方保留的本地化目录，必须叫这个名字
+    // （README 里那条「不能叫 _test」的规则，说的就是这个坑）。
+    const ALLOWED_UNDERSCORE = ['_locales'];
     const offenders = [];
     (function walk(dir, prefix) {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (entry.name === '.git') continue;
         const rel = prefix + entry.name;
-        if (entry.name.startsWith('_')) offenders.push(rel + (entry.isDirectory() ? '/' : ''));
+        if (entry.name.startsWith('_') && !ALLOWED_UNDERSCORE.includes(entry.name)) {
+          offenders.push(rel + (entry.isDirectory() ? '/' : ''));
+        }
         if (entry.isDirectory()) walk(path.join(dir, entry.name), `${rel}/`);
       }
     }(ROOT, ''));
-    check('扩展目录里没有以 “_” 开头的文件或目录', offenders, []);
+    check('扩展目录里没有以 “_” 开头的文件或目录（_locales 除外）', offenders, []);
 
     // manifest 里引用的每个路径都必须真实存在，否则同样会加载失败
     const referenced = [
@@ -276,6 +281,60 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       ...Object.values(MANIFEST.icons),
     ];
     check('manifest 引用的资源全部存在', referenced.filter((p) => !fs.existsSync(path.join(ROOT, p))), []);
+  }
+
+  console.log('\n[1c] 本地化：manifest 必须声明 default_locale，__MSG_ 引用必须有对应词条');
+  {
+    // 商店（Microsoft Edge Add-ons / Chrome Web Store）判定扩展语言的依据就是这个字段：
+    // 没有 default_locale，manifest 里的中文只是普通字符，后台会把语言识别成 en-US。
+    check('manifest 声明了 default_locale', MANIFEST.default_locale, 'zh_CN');
+
+    const localeFile = path.join(ROOT, '_locales', MANIFEST.default_locale, 'messages.json');
+    check(`默认语言包存在（_locales/${MANIFEST.default_locale}/messages.json）`, fs.existsSync(localeFile), true);
+
+    let MESSAGES = {};
+    let parseOk = true;
+    try {
+      MESSAGES = JSON.parse(fs.readFileSync(localeFile, 'utf8'));
+    } catch {
+      parseOk = false;
+    }
+    // messages.json 语法错误会让整个扩展加载失败（Chrome/Edge 都会直接报错）
+    check('messages.json 是合法 JSON', parseOk, true);
+    check('locale 目录名是合法 locale（下划线 + 地区）',
+      /^[a-z]{2,3}(_[A-Z]{2})?$/.test(MANIFEST.default_locale), true);
+
+    const expand = (value) => {
+      const keys = [];
+      const text = String(value).replace(/__MSG_([A-Za-z0-9_@]+)__/g, (_, key) => {
+        keys.push(key);
+        return (MESSAGES[key] && MESSAGES[key].message) || '';
+      });
+      return { text, keys };
+    };
+
+    check('name 用的是 __MSG_ 引用（未写死中文）', /^__MSG_.*__$/.test(MANIFEST.name), true);
+    check('description 用的是 __MSG_ 引用（未写死中文）', /^__MSG_.*__$/.test(MANIFEST.description), true);
+
+    for (const [field, value, limit] of [['name', MANIFEST.name, 75], ['description', MANIFEST.description, 132]]) {
+      const { text, keys } = expand(value);
+      check(`${field} 的每个 __MSG_ 键都能在语言包里查到`, keys.filter((k) => !MESSAGES[k]), []);
+      check(`${field} 展开后不含未替换的 __MSG_ 残留`, text.includes('__MSG_'), false);
+      check(`${field} 展开后非空`, text.trim().length > 0, true);
+      // 商店对条目名 / 摘要长度有硬限制，超了会直接拒绝提交
+      check(`${field} 展开后不超过 ${limit} 字符（商店限制）`, text.length <= limit, true);
+    }
+
+    const { text: extName } = expand(MANIFEST.name);
+    const { text: extDesc } = expand(MANIFEST.description);
+    check('展开后的扩展名是 BiliSpeed', extName, 'BiliSpeed');
+    check('展开后的描述是 B站自定义倍速', extDesc, 'B站自定义倍速');
+
+    // 词条本身要能替换出来：每个 __MSG_ 键都得有非空 message
+    for (const key of ['extName', 'extDesc']) {
+      check(`语言包词条 ${key} 有非空 message`,
+        Boolean(MESSAGES[key]) && typeof MESSAGES[key].message === 'string' && MESSAGES[key].message.length > 0, true);
+    }
   }
 
   console.log('\n[2] 页面里出现悬浮按钮（Shadow DOM 隔离，不动页面结构）');

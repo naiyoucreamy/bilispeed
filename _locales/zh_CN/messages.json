@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "BiliSpeed",
+    "description": "扩展名称（显示在扩展管理页、商店条目名、安装提示中）"
+  },
+  "extDesc": {
+    "message": "B站自定义倍速",
+    "description": "扩展简短描述（显示在扩展管理页与商店条目摘要中）"
+  }
+}
