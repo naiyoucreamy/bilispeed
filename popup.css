@@ -161,8 +161,20 @@ body:hover .close,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  /* 加减键贴着速度数字：数字先按内容宽度排布，加减键紧随其后，
+     剩下的空白全被推到最右，于是“读数 + 加减键”整体靠左贴紧。 */
+  gap: 10px;
   margin-bottom: 9px;
+}
+
+/* 读数（数字）不参与伸缩，把多余空间让给右侧空白 */
+.readout .rate {
+  flex: 0 0 auto;
+}
+
+/* 加减键紧跟在数字后面，不再被 space-between 推到最右 */
+.readout .stepper {
+  margin-right: auto;
 }
 
 .rate {
@@ -187,20 +199,21 @@ body:hover .close,
   opacity: 0.5;
 }
 
-/* 加减 0.25：两个小方块，悬停泛品牌色 */
+/* 加减 0.25：两个方块，悬停泛品牌色。
+   尺寸放大到 34px（原先 28px）更好点，且整组向左靠紧速度数字。 */
 .stepper {
   display: flex;
-  gap: 5px;
+  gap: 6px;
 }
 
 .step {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   padding: 0;
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 600;
   line-height: 1;
   color: var(--text-soft);
