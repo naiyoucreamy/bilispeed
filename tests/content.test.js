@@ -429,6 +429,274 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     check('退化模式：键与 tabId 无关', String(tab.win.__bilispeed.key()).includes('808'), false);
   }
 
+  console.log('\n[10] 性能契约：切速率不许引发无谓的全量 DOM 扫描');
+  {
+    // 背景：B 站页面很大，document.querySelectorAll('video') 是全篇扫描。
+    // 「切换速率就卡顿」的根因就是这条路径上叠了太多扫描，这里逐条守住。
+    // 用一个会计数的 document 跑真实 content.js。
+    const makeCountingEnv = ({ videos = 1, storageNeverResolves = false, navType = 'navigate' } = {}) => {
+      const counters = { qsa: 0 };
+      const location = new URL('https://www.bilibili.com/video/BV1AA411c7de');
+      const win = { location, addEventListener: () => {}, removeEventListener: () => {} };
+      win.window = win;
+      const list = [];
+      for (let i = 0; i < videos; i += 1) list.push(createVideo());
+
+      const store = new Map();
+      const sessionStorage = {
+        getItem: (k) => (store.has(k) ? store.get(k) : null),
+        setItem: (k, v) => store.set(k, String(v)),
+        removeItem: (k) => store.delete(k),
+      };
+      const document = {
+        documentElement: {},
+        hidden: false,
+        querySelectorAll: (sel) => {
+          if (sel === 'video') { counters.qsa += 1; return list.slice(); }
+          return [];
+        },
+        querySelector: (sel) => (sel === 'video' ? (list[0] || null) : null),
+        addEventListener: () => {},
+      };
+      const st = {};
+      const settle = (fn) => (storageNeverResolves ? new Promise(() => {}) : Promise.resolve().then(fn));
+      const sessionApi = {
+        get(keys) {
+          return settle(() => {
+            const out = {};
+            if (keys === null) Object.assign(out, st);
+            else for (const k of [].concat(keys)) if (k in st) out[k] = st[k];
+            return out;
+          });
+        },
+        set(obj) { return settle(() => { Object.assign(st, obj); }); },
+        remove() { return settle(() => {}); },
+      };
+      let observerCb = null;
+      const chrome = {
+        storage: { session: sessionApi, sync: { get: async () => ({}), remove: async () => {} } },
+        runtime: {
+          lastError: undefined,
+          onMessage: { addListener: (fn) => { win.__onMessage = fn; } },
+          sendMessage: async () => ({ ok: true, tabId: 1 }),
+        },
+      };
+      const ctx = vm.createContext({
+        window: win, document, chrome, location, sessionStorage, crypto,
+        performance: { getEntriesByType: () => [{ type: navType }] },
+        history: { pushState: () => {}, replaceState: () => {} },
+        requestAnimationFrame: (fn) => setTimeout(fn, 0),
+        setTimeout, clearTimeout, setInterval, clearInterval,
+        console: { info() {}, log() {}, warn() {} },
+        Math, Number, Object, JSON, URL, Promise, Date, String,
+        MutationObserver: class { constructor(fn) { observerCb = fn; } observe() {} disconnect() {} },
+      });
+      vm.runInContext(SRC, ctx, { filename: 'content.js' });
+      return {
+        counters, list, win,
+        set: (rate) => win.__onMessage({ type: 'bilispeed:set', rate }, { tab: { id: 1 } }, () => {}),
+        fireMutation: (records) => { if (observerCb) observerCb(records); },
+      };
+    };
+
+    // ---- 1. 一次切速率：扫描次数要有上限 ----
+    {
+      const env = makeCountingEnv({ videos: 3 });
+      await wait(150);
+      const before = env.counters.qsa;
+      env.set(8);
+      await wait(700); // 覆盖 0/150/500 补刀窗口 + 一次常规轮询
+      const used = env.counters.qsa - before;
+      check('一次切速率的全量扫描次数 ≤ 6（优化前为 9）', used <= 6, true);
+      check('切速率后所有 video 都被应用', env.list.map((v) => v.playbackRate), [8, 8, 8]);
+    }
+
+    // ---- 2. 连点档位：补刀必须合并，不能线性叠加 ----
+    {
+      const env = makeCountingEnv({ videos: 1 });
+      await wait(150);
+      const before = env.counters.qsa;
+      for (let i = 0; i < 10; i += 1) {
+        env.set(1 + i * 0.25);
+        await wait(20);
+      }
+      await wait(700);
+      const used = env.counters.qsa - before;
+      // 优化前是 10 次立即 + 每次 3 发补刀 = 40 次；合并后应远低于此
+      check('连点 10 次档位的扫描次数 ≤ 30（优化前约 40）', used <= 30, true);
+      check('连点后最终速度正确', env.list[0].playbackRate, 1 + 9 * 0.25);
+    }
+
+    // ---- 3. 关键回归：storage 不返回时，快速轮询必须降频 ----
+    {
+      const env = makeCountingEnv({ storageNeverResolves: true });
+      await wait(2000);
+      const early = env.counters.qsa;
+      const mark = env.counters.qsa;
+      await wait(4000); // 越过 FAST_POLL_BUDGET_MS(3s)
+      const late = (env.counters.qsa - mark) / 4;
+      check('快速轮询期间确实更密（说明预算内是快节奏）', early / 2 > 3, true);
+      // 优化前这里会一直 ~23 次/秒 永不降频
+      check('超出预算后降到常规节奏（< 5 次/秒，优化前约 23 次/秒）', late < 5, true);
+    }
+
+    // ---- 4. 与 video 无关的 DOM 变动不该触发扫描 ----
+    {
+      const env = makeCountingEnv({ videos: 1 });
+      await wait(150);
+      const before = env.counters.qsa;
+      for (let i = 0; i < 300; i += 1) {
+        env.fireMutation([{ addedNodes: [{ nodeType: 1, tagName: 'DIV', querySelector: () => null }] }]);
+      }
+      await wait(100);
+      check('300 次无关 DOM 变动 -> 0 次扫描（优化前 300 次）', env.counters.qsa - before, 0);
+    }
+
+    // ---- 5. 但新增 video 必须立刻被接管 ----
+    {
+      const env = makeCountingEnv({ videos: 1 });
+      await wait(150);
+      const fresh = createVideo();
+      env.list.push(fresh);
+      env.fireMutation([{ addedNodes: [{ nodeType: 1, tagName: 'VIDEO', querySelector: () => null }] }]);
+      await wait(80);
+      check('新增 video 节点后立刻被应用倍速', fresh.playbackRate, 1);
+      env.set(4);
+      await wait(50);
+      check('接管后新 video 跟着目标速度走', fresh.playbackRate, 4);
+    }
+
+    // ---- 6. 同页 replaceState 不该排补偿扫描 ----
+    {
+      const env = makeCountingEnv({ videos: 1 });
+      await wait(150);
+      const before = env.counters.qsa;
+      env.win.__bilispeed.rescan && env.win.__bilispeed.rescan(); // 基线：手动扫描算 1 次
+      const afterManual = env.counters.qsa - before;
+      check('手动 rescan 只扫一次', afterManual, 1);
+    }
+
+    // ---- 7. 路由过滤不能把真路由吞掉：SPA 语义必须原样成立 ----
+    {
+      // 用「真的会改 location」的 history，验证 pushState 补丁仍能识别换页
+      const routed = (() => {
+        const location = new URL('https://www.bilibili.com/video/BV1AA411c7de');
+        const video = createVideo();
+        const win = { location, addEventListener: () => {}, removeEventListener: () => {} };
+        win.window = win;
+        const store = new Map();
+        const sessionStorage = {
+          getItem: (k) => (store.has(k) ? store.get(k) : null),
+          setItem: (k, v) => store.set(k, String(v)),
+          removeItem: (k) => store.delete(k),
+        };
+        const document = {
+          documentElement: {}, hidden: false,
+          querySelectorAll: (sel) => (sel === 'video' ? [video] : []),
+          querySelector: (sel) => (sel === 'video' ? video : null),
+          addEventListener: () => {},
+        };
+        const st = {};
+        const sessionApi = {
+          get: async (keys) => {
+            const o = {};
+            if (keys === null) Object.assign(o, st);
+            else for (const k of [].concat(keys)) if (k in st) o[k] = st[k];
+            return o;
+          },
+          set: async (obj) => { Object.assign(st, obj); },
+          remove: async () => {},
+        };
+        const chrome = {
+          storage: { session: sessionApi, sync: { get: async () => ({}), remove: async () => {} } },
+          runtime: {
+            lastError: undefined,
+            onMessage: { addListener: (fn) => { win.__onMessage = fn; } },
+            sendMessage: async () => ({ ok: true, tabId: 1 }),
+          },
+        };
+        const history = {
+          pushState(state, title, url) { if (url) location.href = new URL(url, location.href).href; },
+          replaceState(state, title, url) { if (url) location.href = new URL(url, location.href).href; },
+        };
+        const ctx = vm.createContext({
+          window: win, document, chrome, location, sessionStorage, crypto, history,
+          performance: { getEntriesByType: () => [{ type: 'navigate' }] },
+          requestAnimationFrame: (fn) => setTimeout(fn, 0),
+          setTimeout, clearTimeout, setInterval, clearInterval,
+          console: { info() {}, log() {}, warn() {} },
+          Math, Number, Object, JSON, URL, Promise, Date, String,
+          MutationObserver: class { observe() {} disconnect() {} },
+        });
+        vm.runInContext(SRC, ctx, { filename: 'content.js' });
+        return { win, video, location, history };
+      })();
+
+      await wait(120);
+      routed.win.__onMessage({ type: 'bilispeed:set', rate: 4 }, { tab: { id: 1 } }, () => {});
+      await wait(600);
+      check('路由前设为 4x', routed.video.playbackRate, 4);
+
+      // 同视频切分P（只变 query）-> 身份不变 -> 保持
+      routed.history.pushState({}, '', '/video/BV1AA411c7de?p=2');
+      await wait(700);
+      check('pushState 切分P 保持 4x（路由补刀没被过滤掉）', routed.video.playbackRate, 4);
+
+      // 换视频 -> 清零
+      routed.history.pushState({}, '', '/video/BV1ZZ411c7de');
+      await wait(700);
+      check('pushState 换视频 -> 清零 1x', routed.video.playbackRate, 1);
+
+      // 同页 replaceState 不该影响速度
+      routed.history.replaceState({}, '', routed.location.href);
+      await wait(300);
+      check('同页 replaceState 不影响速度', routed.video.playbackRate, 1);
+    }
+  }
+
+  console.log('\n[11] 性能自检命令：__bilispeed.profile() 必须在真实页面里可用');
+  {
+    // 这是给用户/维护者排障用的入口，绝不能是个会抛错或返回 undefined 的花架子，
+    // 也绝不能因为“为了测量”而把用户的速度改坏。
+    const env = createEnv({
+      url: 'https://www.bilibili.com/video/BV1AA411c7de',
+      tabId: 4242,
+      browser: createBrowserStorage(),
+      videos: [createVideo()],
+    });
+    await wait(120);
+    env.popupSend({ type: 'bilispeed:set', rate: 2.5 });
+    await wait(60);
+    check('自检前先有个非默认速度', env.video.playbackRate, 2.5);
+
+    check('暴露了 profile 方法', typeof env.win.__bilispeed.profile, 'function');
+    const stats = await env.win.__bilispeed.profile(400);
+
+    for (const key of ['durationMs', 'mechanism', 'perSecond', 'longTasks', 'videoState', 'rateSwitchCost']) {
+      check(`自检结果含 ${key}`, key in stats, true);
+    }
+    check('mechanism 列出了各监控机制', typeof stats.mechanism.poll, 'number');
+    check('mechanism 含 MutationObserver 分类计数',
+      typeof stats.mechanism.mutation.total === 'number'
+      && typeof stats.mechanism.mutation.videoRelated === 'number', true);
+    check('mechanism 含 DOM 查询计数', typeof stats.mechanism.qsa, 'number');
+    check('longTasks 结构完整',
+      ['count', 'totalMs', 'max'].every((k) => typeof stats.longTasks[k] === 'number'), true);
+    check('videoState 先报 playbackRate',
+      stats.videoState && typeof stats.videoState.playbackRate === 'number', true);
+    check('rateSwitchCost 是数字（不是 NaN/undefined）',
+      Number.isFinite(stats.rateSwitchCost.setRateMs)
+      && Number.isFinite(stats.rateSwitchCost.setRateBackMs), true);
+
+    // 关键：测量过程必须无损，跑完速度要回到用户设的 2.5x
+    check('自检后速度被还原', env.video.playbackRate, 2.5);
+    check('自检后 target 也被还原', env.win.__bilispeed.get().target, 2.5);
+
+    // 默认参数不能是 undefined/NaN
+    const src = SRC;
+    check('profile 有默认时长，不是必填参数', /profile:\s*async\s*\(durationMs\s*=\s*\d+\)/.test(src), true);
+  }
+
   console.log(`\n结果：${pass} 通过 / ${fail} 失败\n`);
   process.exit(fail === 0 ? 0 : 1);
 })();

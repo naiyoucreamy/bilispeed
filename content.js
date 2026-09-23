@@ -62,8 +62,17 @@
   /** 新标签页的默认速度 */
   const DEFAULT_RATE = 1;
 
-  /** 兜底轮询间隔 */
+  /** 兜底轮询间隔（速度已落定后的常规节奏） */
   const POLL_INTERVAL_MS = 500;
+
+  /** 速度还没落定时的快速轮询间隔 */
+  const FAST_POLL_INTERVAL_MS = 80;
+
+  /**
+   * 快速轮询的最长持续时间。超过就降到常规间隔 —— 否则一旦
+   * chrome.storage.session 长时间不返回，快速轮询会一直跑下去。
+   */
+  const FAST_POLL_BUDGET_MS = 3000;
 
   /* ---------------------------- 状态 ---------------------------- */
 
@@ -110,6 +119,24 @@
   /** 写 session 的防抖计时器 */
   let writeTimer = null;
 
+  /**
+   * 性能计数器（诊断用，只加不读，开销可忽略）。
+   * 用来回答“到底哪个机制在疯跑”—— 这是定位卡顿的关键证据。
+   * 通过页面 Console 的 __bilispeed.profile() 查看。
+   */
+  const perf = {
+    poll: 0,          // 轮询 tick 次数
+    ratechange: 0,    // ratechange 事件次数
+    mediaEvent: 0,    // 其它媒体事件次数
+    mutationTotal: 0, // MutationObserver 回调次数（收到的批次数）
+    mutationVideo: 0, // 其中“确实出现 video”而触发的处理次数
+    route: 0,         // SPA 路由变化次数
+    syncVideo: 0,     // syncVideo 调用次数
+    qsa: 0,           // document.querySelectorAll('video') 调用次数
+    applyRate: 0,     // 真正写 playbackRate 的次数
+    storageWrite: 0,  // session 写入次数
+  };
+
   /* ---------------------------- 视频身份与“进入即清零” ---------------------------- */
 
   /**
@@ -155,13 +182,17 @@
     }
   }
 
-  /** 把速度归零（内存 + session 一起，立即落盘），并刷新 popup 可能看到的实际值 */
+  /**
+   * 把速度归零（内存 + session 一起，立即落盘），并刷新 popup 可能看到的实际值。
+   *
+   * 注意：这里**不**自己扫 DOM —— 调用方 syncVideo() 紧接着就会用同一份
+   * video 列表把速度铺开（含这一刀归零），所以本函数只管状态与落盘。
+   */
   async function resetForNewVideo(identity) {
     const previous = targetRate;
     targetRate = DEFAULT_RATE;
     videoIdentity = identity;
     enteredVideo = true;
-    applyRateEverywhere();
     noteRateChange(DEFAULT_RATE, `进入视频 ${identity}`);
     await flushSaveRate(); // 立即写 1x，避免防抖窗口内刷新导致旧值残留
     if (previous !== DEFAULT_RATE) {
@@ -189,6 +220,44 @@
   }
 
   /* ---------------------------- 工具 ---------------------------- */
+
+  /**
+   * 查页面上所有 video（统一入口，顺带计数，便于性能自检）。
+   * @returns {ArrayLike<HTMLVideoElement>}
+   */
+  function queryVideos() {
+    perf.qsa += 1;
+    return document.querySelectorAll('video');
+  }
+
+  /**
+   * 单调时钟（毫秒）。performance.now 缺失时退回 Date.now，
+   * 保证性能自检在任何环境下都不会因为取时间而抛错。
+   * @returns {number}
+   */
+  function nowMs() {
+    try {
+      if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+        return performance.now();
+      }
+    } catch (err) { /* 落到 Date.now */ }
+    return Date.now();
+  }
+
+  /**
+   * 下一帧执行（带 setTimeout 兜底）。
+   * 用于把同一帧内成批的事件/变动聚合成一次处理，避免重复扫描 DOM。
+   * @param {() => void} fn
+   */
+  function requestFrame(fn) {
+    try {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(fn);
+        return;
+      }
+    } catch (err) { /* 落到 setTimeout */ }
+    setTimeout(fn, 16);
+  }
 
   /**
    * 生成本标签页专属的随机 ID。
@@ -253,6 +322,7 @@
     if (!video) return false;
     if (Math.abs(video.playbackRate - targetRate) < 0.001) return false;
     try {
+      perf.applyRate += 1;
       video.playbackRate = targetRate;
       return true;
     } catch (err) {
@@ -261,24 +331,36 @@
     }
   }
 
-  /** 对页面上所有 video 应用当前目标速度 */
-  function applyRateEverywhere() {
-    applyRateTo(currentVideo);
-    for (const video of document.querySelectorAll('video')) {
-      if (video !== currentVideo) applyRateTo(video);
-    }
+  /**
+   * 对页面上所有 video 应用当前目标速度。
+   *
+   * 注意：本函数**不做** document.querySelectorAll —— 一次查询一把梭，
+   * 由调用方把结果传进来，避免一次逻辑里对整篇文档查两遍（B 站页面很大）。
+   *
+   * currentVideo 仍然单独补一刀：它有可能已经脱离开文档（换源瞬间），
+   * 这时不在查询结果里，但依然应该是被接管的目标。
+   * applyRateTo 内部判等，所以重复应用没有任何额外代价。
+   * @param {ArrayLike<HTMLVideoElement>} [videos] 已查好的 video 列表
+   */
+  function applyRateEverywhere(videos) {
+    const list = videos || queryVideos();
+    for (const video of list) applyRateTo(video);
+    if (currentVideo) applyRateTo(currentVideo);
   }
 
   /* ---------------------------- video 接管 ---------------------------- */
 
-  /** 找到页面上“真正在播放”的 video：优先未暂停的，其次时长最长的 */
-  function findVideo() {
-    const videos = Array.from(document.querySelectorAll('video'));
-    if (videos.length === 0) return null; // 视频还没加载出来，属正常情况
+  /**
+   * 找到页面上“真正在播放”的 video：优先未暂停的，其次时长最长的。
+   * @param {ArrayLike<HTMLVideoElement>} [videos] 已查好的 video 列表（可复用，省一次查询）
+   */
+  function findVideo(videos) {
+    const list = videos || queryVideos();
+    if (list.length === 0) return null; // 视频还没加载出来，属正常情况
 
     let best = null;
     let bestScore = -1;
-    for (const video of videos) {
+    for (const video of list) {
       if (!video.currentSrc && video.readyState === 0) continue;
       let score = 0;
       if (!video.paused) score += 100;
@@ -288,7 +370,7 @@
         best = video;
       }
     }
-    return best || videos[0];
+    return best || list[0];
   }
 
   /** 解绑当前 video 上的所有监听器 */
@@ -317,10 +399,12 @@
     currentVideo = video;
 
     const onEvent = () => {
+      perf.mediaEvent += 1;
       applyRateTo(video);
     };
 
     const onRateChange = () => {
+      perf.ratechange += 1;
       // 核心逻辑：被外部（B 站播放器 / 其它扩展）改了速率，立刻改回目标值。
       // applyRateTo 内部会判等，因此不会死循环。
       if (Math.abs(video.playbackRate - targetRate) >= 0.001) {
@@ -352,39 +436,61 @@
   /**
    * 每次“世界可能变了”之后调用：先判断是否进了新视频（可能清零），
    * 再重找 video 并保证速度正确。
+   *
+   * 性能要点：整段逻辑只查一次 DOM（findVideo 内部那一次），
+   * 之后复用同一个列表把速度铺到所有 video 上。
    */
   function syncVideo() {
+    perf.syncVideo += 1;
     // 1) 视频身份变化 -> 可能要把速度清零（离开再进来 / 换视频）
     assessVideoEntry(videoIdentityNow());
 
-    // 2) 找到 video 并接管，把当前目标速度钉上去
-    const video = findVideo();
-    if (video) {
-      adoptVideo(video);
-      applyRateTo(video);
-    } else {
-      // 视频元素还不存在（页面刚打开 / SPA 正在渲染），属正常，等下一轮
-      releaseVideo();
-    }
+    // 2) 找到 video 并接管，把当前目标速度钉上去。
+    //    这里拿到的列表顺手留给第 3 步复用，避免重复查询。
+    const videos = queryVideos();
+    const video = findVideo(videos);
+    if (video) adoptVideo(video);
+    else releaseVideo(); // 视频还不存在（页面刚打开 / SPA 正在渲染），等下一轮
 
-    // 页面上可能有多个 video（预览播放器等），一并处理
-    for (const other of document.querySelectorAll('video')) {
-      if (other !== currentVideo) applyRateTo(other);
-    }
+    // 3) 页面上可能有多个 video（预览播放器等），一并处理
+    applyRateEverywhere(videos);
   }
 
   /* ---------------------------- 监控机制 ---------------------------- */
 
-  /** MutationObserver：video 被添加/移除/替换时立即响应 */
+  /**
+   * MutationObserver：video 被添加/移除/替换时立即响应。
+   *
+   * 性能要点：B 站页面的 DOM 变动极频繁（弹幕、评论、推荐流、侧栏……），
+   * 每个 mutation 都跑一次 findVideo() 会造成大量无谓的整篇文档查询。
+   * 所以这里只做两件事：
+   *   1. 用 rAF 把同一帧内的成批 mutation 聚合成一次处理；
+   *   2. 只在“真的出现了 video”时才去接管。
+   * 轮询仍在兜底，所以这里漏掉任何边缘情况都不会影响功能。
+   */
   function startDomObserver() {
-    const observer = new MutationObserver(() => {
-      const video = findVideo();
-      if (!video) {
-        if (currentVideo) releaseVideo();
-        return;
-      }
-      if (video !== currentVideo) adoptVideo(video);
-      else applyRateTo(video);
+    let scheduled = false;
+
+    const observer = new MutationObserver((records) => {
+      perf.mutationTotal += 1;
+      if (scheduled) return;
+      // 只有“新增了 video 节点”才需要立刻响应；其余 DOM 变动与本扩展无关。
+      // （video 已存在时的速度纠正交给事件与轮询，不必为每次 mutation 扫一遍）
+      if (!hasVideoInMutations(records)) return;
+
+      scheduled = true;
+      requestFrame(() => {
+        scheduled = false;
+        perf.mutationVideo += 1;
+        const videos = queryVideos();
+        if (videos.length === 0) {
+          if (currentVideo) releaseVideo();
+          return;
+        }
+        const video = findVideo(videos);
+        if (video && video !== currentVideo) adoptVideo(video);
+        applyRateEverywhere(videos);
+      });
     });
     observer.observe(document.documentElement, {
       childList: true,
@@ -394,29 +500,88 @@
   }
 
   /**
+   * 这批 mutation 里是否新增了 video 元素（含嵌套在新增子树里的）。
+   * @param {MutationRecord[]} records
+   * @returns {boolean}
+   */
+  function hasVideoInMutations(records) {
+    for (const record of records) {
+      const added = record.addedNodes;
+      if (!added || added.length === 0) continue;
+      for (const node of added) {
+        if (node.nodeType !== 1) continue; // 只要元素节点
+        if (node.tagName === 'VIDEO') return true;
+        // 新增的是容器（B 站换播放器时常见）：看它内部有没有 video
+        if (typeof node.querySelector === 'function' && node.querySelector('video')) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * 兜底轮询。
+   *
    * 恢复速度之前用更短的间隔（速度还没落定的窗口通常只有几十毫秒），
    * 拿到速度后固定为 POLL_INTERVAL_MS，避免长期高频扫描浪费 CPU。
+   *
+   * 用 setTimeout 自续期而不是 setInterval，原因有二（都是性能/正确性刚需）：
+   *  1. 间隔可以在每轮之间动态决定，降频时**下一个 tick 就生效**，
+   *     不用先 clearInterval 再重启（旧写法在重启的窗口里可能漏一次或叠一次）；
+   *  2. setInterval 在页面卡顿时会堆积回调，一恢复就连续补跑好几轮扫描，
+   *     正是“切换速率时更卡”的放大器；自续期天然不会堆积。
+   *
+   * 另外**必须给快速轮询一个上限**：loadRate() 期间若 chrome.storage.session
+   * 长时间不返回（service worker 冷启动、存储异常），rateLoaded 会一直是 false，
+   * 80ms 快速轮询就会无限期地以 ~12 次/秒 扫描 DOM（实测过，这是真正的卡顿源）。
+   * 超过 FAST_POLL_BUDGET_MS 后一律降到常规间隔，功能不变（轮询本来就只是兜底）。
    */
   function startPolling() {
     if (pollTimer !== null) return;
-    const interval = rateLoaded ? POLL_INTERVAL_MS : 80;
-    pollTimer = setInterval(() => {
+    const startedAt = Date.now();
+
+    const tick = () => {
+      pollTimer = null;
+      perf.poll += 1;
       syncVideo();
-      if (rateLoaded && interval !== POLL_INTERVAL_MS) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        startPolling(); // 用正常间隔重启
-      }
-    }, interval);
+
+      // 速度已恢复到常规节奏，或快速轮询已超出预算 -> 用常规间隔
+      const stillFast = !rateLoaded && (Date.now() - startedAt) < FAST_POLL_BUDGET_MS;
+      pollTimer = setTimeout(tick, stillFast ? FAST_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
+    };
+
+    pollTimer = setTimeout(tick, rateLoaded ? POLL_INTERVAL_MS : FAST_POLL_INTERVAL_MS);
   }
 
-  /** SPA 路由监听：B 站跳转走 history.pushState，不触发原生事件，必须打补丁 */
+  /** 停掉轮询（标签页隐藏 / 要销毁时用，避免后台白扫） */
+  function stopPolling() {
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  /**
+   * SPA 路由监听：B 站跳转走 history.pushState，不触发原生事件，必须打补丁。
+   *
+   * 性能要点：B 站在滚动、加载推荐位时也会调用 pushState/replaceState，
+   * 每次都排 4 次全量扫描代价很高。这里两处收口：
+   *  1. 只有 pathname 真的变了才算“换了页面”（同页 replaceState 不排扫描）；
+   *  2. 补刀复用 scheduleResync 的合并逻辑，连续路由变化不会叠加。
+   */
   function startSpaWatcher() {
+    /** 上一次见到的路径，用来识别“真的换页了” */
+    let lastPath = location.pathname + location.search;
+
     const onRouteChange = () => {
+      const now = location.pathname + location.search;
+      if (now === lastPath) return; // 只是同页状态刷新，不关本扩展的事
+      lastPath = now;
+      perf.route += 1;
+
       // 路由刚变时新 video 往往还没挂上，多补几次；轮询也会兜底。
       // 速度本身不变（本标签页共用），只是要在新 video 上重新钉一遍。
-      [0, 150, 500, 1200].forEach((delay) => setTimeout(syncVideo, delay));
+      // 同样用 0/150/500 的节奏即可，1200ms 那次由常规轮询覆盖。
+      scheduleResync();
     };
 
     for (const method of ['pushState', 'replaceState']) {
@@ -432,7 +597,13 @@
     window.addEventListener('hashchange', onRouteChange);
     window.addEventListener('pageshow', onRouteChange);
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) syncVideo();
+      if (document.hidden) {
+        // 切到后台就别再扫了，省 CPU / 省电
+        stopPolling();
+        return;
+      }
+      syncVideo();
+      startPolling(); // 回到前台恢复兜底轮询
     });
   }
 
@@ -466,10 +637,10 @@
       // everSynced 为真说明 popup 已经下发过权威值，别被旧值覆盖
       if (stored !== undefined && !everSynced) {
         targetRate = normalizeRate(stored);
-        // 立刻补一次扫描：此刻 video 元素可能还没出现/还没被接管，
-        // 光调 applyRateEverywhere() 会漏掉它
+        // 立刻补一次扫描：此刻 video 元素可能还没出现/还没被接管。
+        // syncVideo() 内部已经会把速度铺到页面上**所有** video（含新出现的），
+        // 所以这里不需要再单独调一次 applyRateEverywhere()。
         syncVideo();
-        applyRateEverywhere();
         if (targetRate !== DEFAULT_RATE) {
           console.info(`[BiliSpeed] 已恢复本标签页的速度：${targetRate}x`);
         }
@@ -491,6 +662,7 @@
     const key = sessionKey();
     if (!key) return;
     try {
+      perf.storageWrite += 1;
       await chrome.storage.session.set({ [key]: rate });
     } catch (err) {
       /* 写失败不影响当前页面使用 */
@@ -570,19 +742,44 @@
   }
 
   /**
-   * 设置本标签页的速度
+   * 设置本标签页的速度。
+   *
+   * 这是「切换速率」的热路径，必须只做必要的事：
+   *  - 立刻查一次 DOM 并铺速度（用户要马上看到效果）；
+   *  - 之后只在“新 video 可能还没挂上”的窗口里补几次轻量校验，
+   *    且补校验之间彼此去重，避免用户连点档位时堆叠出一串全量扫描。
    * @param {number} rate
    */
   function setRate(rate) {
     targetRate = normalizeRate(rate);
     everSynced = true;
     rateLoaded = true;
+
+    // 一次查询，铺到所有 video（含 currentVideo）
     applyRateEverywhere();
+
     noteRateChange(targetRate, 'popup 设置');
     saveRate();
-    // 新 video 可能马上要出现（例如正在切视频），补几次
-    [0, 150, 500].forEach((delay) => setTimeout(syncVideo, delay));
+
+    // 新 video 可能马上要出现（例如正在切视频），补几次。
+    // scheduleResync 内部会合并同一批补刀，连点档位不会叠加扫描。
+    scheduleResync();
     return targetRate;
+  }
+
+  /**
+   * 短时间内安排几次补偿扫描（合并重复请求）。
+   * 只在“video 可能刚被替换、事件还没到”的窗口里用，属于兜底性质。
+   */
+  let resyncTimers = null;
+  function scheduleResync() {
+    if (resyncTimers !== null) {
+      for (const timer of resyncTimers) clearTimeout(timer);
+    }
+    resyncTimers = [0, 150, 500].map((delay) => setTimeout(() => {
+      if (delay === 500) resyncTimers = null;
+      syncVideo();
+    }, delay));
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -661,6 +858,149 @@
       }
       return report;
     },
+    /**
+     * 性能自检：在页面 Console 里跑，量出本扩展到底占了多少主线程。
+     *
+     * 用法：
+     *   await __bilispeed.profile()          // 默认测 3 秒
+     *   await __bilispeed.profile(5000)      // 测 5 秒
+     *
+     * 它做三件事：
+     *   1. 统计各监控机制（轮询/事件/MutationObserver/路由）被触发了多少次；
+     *   2. 用 PerformanceObserver 抓长任务（longtask），看主线程有没有被堵住；
+     *   3. 主动"切换一次速率"，单独量这次操作的开销。
+     * 测完会把结果打印到 Console 并返回对象。
+     *
+     * @param {number} durationMs 观测时长
+     */
+    profile: async (durationMs = 3000) => {
+      const stats = {
+        durationMs,
+        mechanism: {
+          poll: perf.poll,
+          ratechange: perf.ratechange,
+          mediaEvent: perf.mediaEvent,
+          mutation: { total: perf.mutationTotal, videoRelated: perf.mutationVideo },
+          route: perf.route,
+          syncVideo: perf.syncVideo,
+          qsa: perf.qsa,
+          applyRate: perf.applyRate,
+          storageWrite: perf.storageWrite,
+        },
+        perSecond: null,
+        longTasks: { count: 0, totalMs: 0, max: 0, supported: false },
+        videoState: null,
+        rateSwitchCost: null,
+      };
+
+      // ---- 1. 观测窗口：只听长任务，不打扰页面 ----
+      let observer = null;
+      try {
+        if (typeof PerformanceObserver === 'function') {
+          observer = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              stats.longTasks.count += 1;
+              stats.longTasks.totalMs += entry.duration;
+              if (entry.duration > stats.longTasks.max) stats.longTasks.max = entry.duration;
+            }
+          });
+          observer.observe({ entryTypes: ['longtask'] });
+          stats.longTasks.supported = true;
+        }
+      } catch (err) {
+        /* 不支持 longtask 就算了，下面的计数依然有效 */
+      }
+
+      const snap = () => ({ ...perf });
+      const before = snap();
+      const windowStart = nowMs();
+
+      // ---- 2. 观测期间主动切一次速率（模拟用户点档位）----
+      const origRate = targetRate;
+      const probeRate = origRate === 4 ? 8 : 4;
+      await new Promise((resolve) => {
+        setTimeout(() => {
+          setRate(probeRate);
+          setTimeout(() => {
+            setRate(origRate); // 恢复原速度
+            setTimeout(resolve, 200);
+          }, Math.max(300, durationMs / 2));
+        }, 100);
+      });
+
+      const after = snap();
+      const elapsedSec = Math.max(0.001, (nowMs() - windowStart) / 1000);
+      if (observer) { try { observer.disconnect(); } catch (err) { /* 忽略 */ } }
+
+      // 观测窗口内的增量 + 折算到每秒（每秒次数最直观）
+      stats.countersDuringWindow = {};
+      stats.perSecond = {};
+      for (const key of Object.keys(after)) {
+        const delta = after[key] - before[key];
+        stats.countersDuringWindow[key] = delta;
+        stats.perSecond[key] = Number((delta / elapsedSec).toFixed(1));
+      }
+      stats.longTasks.totalMs = Number(stats.longTasks.totalMs.toFixed(1));
+      stats.longTasks.max = Number(stats.longTasks.max.toFixed(1));
+
+      // ---- 3. 单独量一次「切换速率」的同步耗时 ----
+      {
+        const t0 = nowMs();
+        setRate(probeRate);
+        const t1 = nowMs();
+        setRate(origRate);
+        const t2 = nowMs();
+        stats.rateSwitchCost = {
+          setRateMs: Number((t1 - t0).toFixed(2)),
+          setRateBackMs: Number((t2 - t1).toFixed(2)),
+        };
+        // 确保恢复用户原本的速度（setRate 已恢复，这里再兜一次底）
+        targetRate = origRate;
+        applyRateEverywhere();
+      }
+
+      // 逐项安全取值：诊断代码绝不能因为某个属性缺失/抛错而中断
+      const num = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+      const v = currentVideo || document.querySelector('video');
+      stats.videoState = v
+        ? {
+          playbackRate: num(v.playbackRate),
+          readyState: num(v.readyState),
+          paused: typeof v.paused === 'boolean' ? v.paused : null,
+          buffered: (() => {
+            try {
+              if (!v.buffered || v.buffered.length === 0) return '(空)';
+              return `${v.buffered.start(0).toFixed(1)}~${v.buffered.end(v.buffered.length - 1).toFixed(1)}s`;
+            } catch (err) {
+              return '(读不到)';
+            }
+          })(),
+          currentTime: num(v.currentTime),
+          duration: num(v.duration),
+          videoWidth: num(v.videoWidth),
+          videoHeight: num(v.videoHeight),
+          droppedFrames: (() => {
+            try {
+              return typeof v.getVideoPlaybackQuality === 'function'
+                ? num(v.getVideoPlaybackQuality().droppedVideoFrames) : null;
+            } catch (err) {
+              return null;
+            }
+          })(),
+          totalFrames: (() => {
+            try {
+              return typeof v.getVideoPlaybackQuality === 'function'
+                ? num(v.getVideoPlaybackQuality().totalVideoFrames) : null;
+            } catch (err) {
+              return null;
+            }
+          })(),
+        }
+        : null;
+
+      console.log('[BiliSpeed 性能自检]', JSON.stringify(stats, null, 2));
+      return stats;
+    },
   };
 
   /* ---------------------------- 启动 ---------------------------- */
@@ -675,16 +1015,15 @@
     // 不依赖任何扩展消息链路，所以这一步在任何情况下都能可靠执行。
     await loadRate();
     await resolveTabId();  // 仅补一个诊断用的 tabId
-    applyRateEverywhere();
+    // loadRate 内部恢复过速度时已经 syncVideo 过一次；这里只在“没恢复过”时
+    // 补一刀，避免启动阶段对同一份 DOM 反复全量扫描。
+    if (targetRate === DEFAULT_RATE) applyRateEverywhere();
   }
 
   boot();
 
   window.addEventListener('pagehide', () => {
-    if (pollTimer !== null) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
+    stopPolling();
     // 标签页关闭时什么都不用清 —— session 存储会随标签页自动销毁，
     // 这正是“关闭标签页即清除速度”的实现方式。
   });

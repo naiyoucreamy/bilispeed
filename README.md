@@ -41,7 +41,7 @@
 ## 自测（不需要浏览器）
 
 ```bash
-node tests/content.test.js     # 倍速逻辑：按标签页隔离、刷新恢复、SPA 跳转
+node tests/content.test.js     # 倍速逻辑：按标签页隔离、刷新恢复、SPA 跳转、性能契约
 node tests/popup-ui.test.js    # 弹窗界面与下发流程（含悬浮面板内嵌打开的场景）
 node tests/floating.test.js    # 悬浮按钮：清单注册、开关面板、本地化词条、边界情况
 ```
@@ -51,5 +51,31 @@ node tests/floating.test.js    # 悬浮按钮：清单注册、开关面板、�
 > 否则扩展会直接加载失败。`tests/floating.test.js` 里有一条断言专门守着这个坑。
 >
 > 唯一的例外是 `_locales`：浏览器官方保留的本地化目录，必须叫这个名字，断言里已放行。
+
+## 卡顿怎么查（性能自检）
+
+如果感觉切换倍速时页面/视频卡顿，不用装 profiler，在**B 站页面的 Console** 里跑：
+
+```js
+await __bilispeed.profile()        // 默认观测 3 秒
+await __bilispeed.profile(5000)    // 观测 5 秒
+```
+
+它会主动切一次速率并回报这些数据（跑完会把速度还原成你原来设的值）：
+
+| 字段 | 看什么 |
+| --- | --- |
+| `perSecond` | 各监控机制**每秒触发多少次**。`poll` 稳定后应 ≈ 2；`mutationTotal` 高说明页面 DOM 在狂动 |
+| `mechanism.qsa` | 每秒全篇 `querySelectorAll('video')` 次数。这是 DOM 扫描的总开销，越低越好 |
+| `longTasks` | 主线程长任务（>50ms）的个数/总时长/最长一次。**这里非 0 才是真的“卡”** |
+| `rateSwitchCost` | 单次 `setRate` 的同步耗时（毫秒）。正常应在 1ms 量级 |
+| `videoState` | 播放器真实状态：`buffered` 缓冲区间、`droppedFrames` 丢帧数、`readyState` |
+
+判读经验：
+
+- `longTasks.count` 明显 > 0 且 `rateSwitchCost` 也大 → 是扩展脚本占住了主线程；
+- `longTasks` 为 0、`rateSwitchCost` 极小，但视频仍卡 → **不是扩展的问题**，
+  多半是播放器/解码侧（尤其高倍速、4K、PCDN 源），扩展只写了一个 `playbackRate`；
+- `videoState.buffered` 很短或 `droppedFrames` 持续增长 → 是缓冲/解码跟不上，与扩展无关。
 
 
