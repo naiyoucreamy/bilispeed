@@ -160,21 +160,28 @@ body:hover .close,
 .readout {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  /* 加减键贴着速度数字：数字先按内容宽度排布，加减键紧随其后，
-     剩下的空白全被推到最右，于是“读数 + 加减键”整体靠左贴紧。 */
-  gap: 10px;
+  /* 加减键锚在左边固定位置（left + FOOT 的宽度），与数字宽度无关：
+     1.00 → 12.50 位数变化时，按钮一动不动。 */
+  justify-content: flex-start;
+  position: relative;
+  min-height: 34px;
   margin-bottom: 9px;
 }
 
-/* 读数（数字）不参与伸缩，把多余空间让给右侧空白 */
+/* 读数（数字）宽度自由增长，但绝不去推挤右边的加减键 */
 .readout .rate {
   flex: 0 0 auto;
 }
 
-/* 加减键紧跟在数字后面，不再被 space-between 推到最右 */
+/* 加减键固定在距面板左侧固定距离处：不随数字变宽而右移，
+   数字变长时最多是靠得更近一点（必要时数字自己收缩）。
+   该距离 = 最宽读数「12.50x」的宽度，保证任何速度下都不会重叠。 */
 .readout .stepper {
-  margin-right: auto;
+  position: absolute;
+  left: 112px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
 }
 
 .rate {
