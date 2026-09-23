@@ -127,7 +127,7 @@ function createEnv({ tab, pageRate, hasVideo = true, contentAnswers = true, them
     runtime: {
       lastError: undefined,
       // 关于界面里的版本号取自 manifest，桩要照实提供
-      getManifest: () => ({ version: '2.1.0' }),
+      getManifest: () => ({ version: '2.2.0' }),
     },
     storage: { sync: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
     scripting: { executeScript: async () => [] },
@@ -200,7 +200,7 @@ function createEmbeddedEnv({ pageRate = 3, hasVideo = true } = {}) {
     },
     runtime: {
       lastError: undefined,
-      getManifest: () => ({ version: '2.1.0' }),
+      getManifest: () => ({ version: '2.2.0' }),
     },
     scripting: { executeScript: async () => [] },
   };
@@ -804,11 +804,11 @@ const BV_TAB = { id: 1, url: 'https://www.bilibili.com/video/BV1AA411c7de' };
       runTheme(throwWin, undefined), 'light');
   }
 
-  console.log('\n[16] 版本号：manifest 里升到 2.1.0');
+  console.log('\n[16] 版本号：manifest 里升到 2.2.0');
   {
     const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     check('manifest.json 能解析', typeof MANIFEST, 'object');
-    check('version 为 2.1.0', MANIFEST.version, '2.1.0');
+    check('version 为 2.2.0', MANIFEST.version, '2.2.0');
     check('version 形如 a.b.c（Chrome 只认 0-4 段数字）',
       /^\d+(\.\d+){0,3}$/.test(MANIFEST.version), true);
     check('每段都在 0..65535 内',
@@ -878,9 +878,9 @@ const BV_TAB = { id: 1, url: 'https://www.bilibili.com/video/BV1AA411c7de' };
 
     // ---- 版本号取自 manifest，不写死 ----
     check('版本号从 manifest 读取并加上 v',
-      env.el('aboutVersion').textContent, 'v2.1.0');
+      env.el('aboutVersion').textContent, 'v2.2.0');
     check('HTML 里没有写死版本号（避免升级时漏改）',
-      /v?2\.1\.0/.test(HTML.replace(/<!--[\s\S]*?-->/g, '')), false);
+      /v?2\.2\.0/.test(HTML.replace(/<!--[\s\S]*?-->/g, '')), false);
     check('HTML 里版本是占位符', /id="aboutVersion">—</.test(HTML), true);
 
     // ---- 内嵌面板里同样能用 ----
