@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "default_locale": "zh_CN",
   "name": "__MSG_extName__",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "__MSG_extDesc__",
   "minimum_chrome_version": "102",
 
@@ -30,7 +30,7 @@
 
   "web_accessible_resources": [
     {
-      "resources": ["popup.html", "popup.css"],
+      "resources": ["popup.html", "popup.css", "theme.js"],
       "matches": ["*://*.bilibili.com/*"]
     }
   ],

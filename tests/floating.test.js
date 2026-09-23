@@ -240,7 +240,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
     const war = MANIFEST.web_accessible_resources;
     check('声明了 web_accessible_resources', Array.isArray(war) && war.length === 1, true);
-    check('暴露的就是 popup 界面本身', war[0].resources, ['popup.html', 'popup.css']);
+    check('暴露的就是 popup 界面本身（含它引用的样式与主题脚本）',
+      war[0].resources, ['popup.html', 'popup.css', 'theme.js']);
     check('只对 B 站页面暴露', war[0].matches[0], '*://*.bilibili.com/*');
 
     check('工具栏 action 与 popup.html 保持不变',

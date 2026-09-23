@@ -462,10 +462,24 @@ const THEME_KEY = 'bilispeed.theme';
 const THEME_LIGHT = 'light';
 const THEME_DARK = 'dark';
 
+/**
+ * 取本地存储；取不到返回 null。
+ * 取值本身就可能抛（隐私设置下访问 localStorage 属性即 SecurityError），
+ * 所以连拿引用都包起来。写法与 theme.js 保持一致。
+ * @returns {Storage|null}
+ */
+function themeStorage() {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
+  } catch (err) { /* 见上 */ }
+  return null;
+}
+
 /** 读已保存的主题；读不到 / 读不了都按浅色算 */
 function readTheme() {
+  const store = themeStorage();
   try {
-    return localStorage.getItem(THEME_KEY) === THEME_DARK ? THEME_DARK : THEME_LIGHT;
+    return store && store.getItem(THEME_KEY) === THEME_DARK ? THEME_DARK : THEME_LIGHT;
   } catch (err) {
     return THEME_LIGHT;
   }
@@ -483,7 +497,8 @@ function applyTheme(theme) {
     root.setAttribute('data-theme', theme);
   }
   try {
-    localStorage.setItem(THEME_KEY, theme);
+    const store = themeStorage();
+    if (store) store.setItem(THEME_KEY, theme);
   } catch (err) {
     /* 存不下就只在本次会话生效，不影响使用 */
   }

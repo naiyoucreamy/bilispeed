@@ -22,9 +22,27 @@
   var THEME_KEY = 'bilispeed.theme';
   var root = document.documentElement;
 
+  /**
+   * 取本地存储。
+   * 浏览器里 localStorage 既是全局变量、也是 window 的属性（同一个对象），
+   * 两种写法都写得到；但「访问 localStorage 这个属性」本身在某些隐私设置下
+   * 就会抛 SecurityError，所以连取引用都得包在 try 里。
+   * @returns {Storage|null}
+   */
+  function storage() {
+    try {
+      if (window && window.localStorage) return window.localStorage;
+    } catch (err) { /* 见上 */ }
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
+    } catch (err) { /* 见上 */ }
+    return null;
+  }
+
   var theme = 'light';
   try {
-    if (window.localStorage.getItem(THEME_KEY) === 'dark') theme = 'dark';
+    var store = storage();
+    if (store && store.getItem(THEME_KEY) === 'dark') theme = 'dark';
   } catch (err) {
     /* 读不到存储（隐私模式等）：退回浅色，不影响使用 */
   }

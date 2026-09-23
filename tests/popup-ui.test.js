@@ -743,6 +743,72 @@ const BV_TAB = { id: 1, url: 'https://www.bilibili.com/video/BV1AA411c7de' };
     check('开关有键盘焦点环', /\.switch:focus-visible/.test(CSS), true);
     check('开关与标签用 for 关联（点文字也能切）',
       /<label class="setting-name" for="darkModeToggle">/.test(HTML), true);
+
+    // ---- 6. 持久性：主题必须活过“关弹窗 / 刷新页面”，不是会话级 ----
+    // 主题存 localStorage（磁盘持久），绝不能落到 storage.session 上 ——
+    // 那是内存级、关浏览器就清空的东西（倍速用的才是它，所以倍速会自动归零）。
+    const SRC_CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    check('主题不用 storage.session（会话级，关浏览器即清）',
+      /storage\.session/.test(SRC_CODE), false);
+    const themeSection = SRC.slice(SRC.indexOf('明暗主题'), SRC.indexOf('界面切换'))
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    check('主题不用 storage.sync（避免与倍速语义混淆）',
+      /storage\.sync/.test(themeSection), false);
+
+    // 真跑一遍 theme.js：验证它与 popup.js 读的是同一个键、且能标出内嵌场景
+    const sharedStore = createLocalStorage();
+    sharedStore.setItem('bilispeed.theme', 'dark');
+    const bootRoot = createRoot();
+    vm.runInContext(THEME_JS, vm.createContext({
+      window: { top: {} }, // 模拟悬浮面板的 iframe
+      document: { documentElement: bootRoot },
+      localStorage: sharedStore,
+    }), { filename: 'theme.js' });
+    check('theme.js 能读到 popup.js 写的偏好（同一个键）',
+      bootRoot.getAttribute('data-theme'), 'dark');
+    check('内嵌时 theme.js 会标出 is-embedded',
+      bootRoot.classList.contains('is-embedded'), true);
+
+    // 浏览器里 localStorage 既是全局也是 window 的属性，两种写法都必须读得到，
+    // 否则一旦有人把 theme.js 改成 window.localStorage，偏好会静默失效。
+    const runTheme = (win, globalStore) => {
+      const r = createRoot();
+      vm.runInContext(THEME_JS, vm.createContext({
+        window: win, document: { documentElement: r }, localStorage: globalStore,
+      }), { filename: 'theme.js' });
+      return r.getAttribute('data-theme');
+    };
+    const darkStore = createLocalStorage();
+    darkStore.setItem('bilispeed.theme', 'dark');
+    check('theme.js 走 window.localStorage 也读得到',
+      runTheme({ top: {}, localStorage: darkStore }, darkStore), 'dark');
+    check('theme.js 走全局 localStorage 也读得到',
+      runTheme({ top: {} }, darkStore), 'dark');
+    check('完全没有 localStorage 时退回浅色且不抛',
+      runTheme({ top: {} }, undefined), 'light');
+
+    // 隐私设置下「访问 localStorage 属性」本身就会抛 SecurityError，
+    // 桩里用一个 getter 复刻这个行为，确认是退回浅色而不是崩掉。
+    const throwWin = {};
+    Object.defineProperty(throwWin, 'localStorage', {
+      get() { throw new Error('SecurityError'); },
+    });
+    check('window.localStorage 抛错时退回浅色',
+      runTheme(throwWin, undefined), 'light');
+  }
+
+  console.log('\n[16] 版本号：manifest 里升到 2.1.0');
+  {
+    const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+    check('manifest.json 能解析', typeof MANIFEST, 'object');
+    check('version 为 2.1.0', MANIFEST.version, '2.1.0');
+    check('version 形如 a.b.c（Chrome 只认 0-4 段数字）',
+      /^\d+(\.\d+){0,3}$/.test(MANIFEST.version), true);
+    check('每段都在 0..65535 内',
+      MANIFEST.version.split('.').every((n) => Number(n) >= 0 && Number(n) <= 65535), true);
+    check('manifest_version 仍是 3（没被顺手改坏）', MANIFEST.manifest_version, 3);
+    check('工具栏入口没变', MANIFEST.action.default_popup, 'popup.html');
+    check('权限没被放大', MANIFEST.permissions, ['storage', 'scripting']);
   }
 
   console.log(`\n结果：${pass} 通过 / ${fail} 失败\n`);
