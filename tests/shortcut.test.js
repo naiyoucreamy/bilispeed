@@ -318,7 +318,7 @@ function createPopupEnv({ rate = 1, stored = {} } = {}) {
         cb({ ok: true, rate: message.rate });
       },
     },
-    runtime: { lastError: undefined, getManifest: () => ({ version: '2.2.0' }) },
+    runtime: { lastError: undefined, getManifest: () => ({ version: '2.3.0' }) },
     scripting: { executeScript: async () => [] },
     storage: {
       sync: {
@@ -395,7 +395,7 @@ const KEYS_CODE = stripComments(KEYS_SRC);
     check('三个脚本条目都在 document_start',
       MANIFEST.content_scripts.every((c) => c.run_at === 'document_start'), true);
     check('权限没有被放大', MANIFEST.permissions, ['storage', 'scripting']);
-    check('扩展版本没被顺手改掉', MANIFEST.version, '2.2.0');
+    check('扩展版本没被顺手改掉', MANIFEST.version, '2.3.0');
   }
 
   console.log('\n[2] 词汇表：默认键位、显示文本、匹配规则');
