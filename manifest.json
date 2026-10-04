@@ -25,6 +25,12 @@
       "js": ["floating.js"],
       "run_at": "document_start",
       "all_frames": false
+    },
+    {
+      "matches": ["*://*.bilibili.com/*"],
+      "js": ["keys.js", "shortcut.js"],
+      "run_at": "document_start",
+      "all_frames": false
     }
   ],
 

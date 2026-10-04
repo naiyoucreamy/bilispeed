@@ -21,6 +21,11 @@
  *
  * 界面原则：只显示用户需要的信息。当前速度、常用档位、重置。
  * 不显示任何内部标识（标签页号、存储键、实现细节）。
+ *
+ * 快捷键（第四屏）：键位与步长是全局偏好，存在 sync 区域（跟着账号走，
+ * 与“速度只属于当前标签页”完全是两回事）。键位的定义、匹配规则、显示文本
+ * 都取自 keys.js —— 页面里那套快捷键监听用的是同一份文件，
+ * 所以这一屏显示的就是实际生效的，不会各说各话。
  */
 
 'use strict';
@@ -55,6 +60,14 @@ const aboutBtn = document.getElementById('aboutBtn');
 const aboutView = document.getElementById('aboutView');
 const aboutBackBtn = document.getElementById('aboutBackBtn');
 const aboutVersionEl = document.getElementById('aboutVersion');
+const shortcutsBtn = document.getElementById('shortcutsBtn');
+const shortcutsView = document.getElementById('shortcutsView');
+const shortcutsBackBtn = document.getElementById('shortcutsBackBtn');
+const keyFasterBtn = document.getElementById('keyFaster');
+const keySlowerBtn = document.getElementById('keySlower');
+const keyResetBtn = document.getElementById('keyReset');
+const stepSlider = document.getElementById('stepSlider');
+const stepValueEl = document.getElementById('stepValue');
 const presetButtons = Array.from(document.querySelectorAll('.preset'));
 
 /* ---------------------------- 状态 ---------------------------- */
@@ -511,30 +524,141 @@ function applyTheme(theme) {
 /* ---------------------------- 界面切换 ---------------------------- */
 
 /**
- * 在「倍速主界面 / 设置界面 / 关于界面」之间切换。
+ * 在「倍速主界面 / 设置界面 / 快捷键界面 / 关于界面」之间切换。
  *
- * 三屏是同一份文档里的兄弟节点，靠 [hidden] 互斥显示，不重新加载页面：
+ * 四屏是同一份文档里的兄弟节点，靠 [hidden] 互斥显示，不重新加载页面：
  *   - 这样回到主界面时速度读数、滑块位置原样还在，不用重新读一遍；
  *   - 内嵌面板的高度由挂在 body 上的 ResizeObserver 自动重测上报，
  *     所以这里不用手动通知外层，floating.js 会自己跟着改面板高度。
  *
- * 齿轮按钮只在倍速主界面显示（另两屏各自有「退出」/「返回」），
- * 所以进设置或关于时都要把它收起来。
+ * 齿轮按钮只在倍速主界面显示（其余三屏各自有「退出」/「返回」），
+ * 所以进设置、快捷键或关于时都要把它收起来。
  *
- * @param {'main'|'settings'|'about'} view 目标界面
+ * @param {'main'|'settings'|'shortcuts'|'about'} view 目标界面
  */
 function showView(view) {
   settingsOpen = view !== 'main';
   if (mainView) mainView.hidden = view !== 'main';
   if (settingsView) settingsView.hidden = view !== 'settings';
   if (aboutView) aboutView.hidden = view !== 'about';
+  if (shortcutsView) shortcutsView.hidden = view !== 'shortcuts';
   if (settingsBtn) settingsBtn.hidden = view !== 'main';
+
+  // 离开这一屏就取消没录完的按键，免得它在别的屏上突然吃掉一次按键
+  if (recording !== null) {
+    recording = null;
+    renderShortcuts();
+  }
 
   // 把焦点交给新屏幕上的主要按钮，键盘用户不至于原地丢失焦点
   const target = view === 'about'
     ? aboutBackBtn
-    : (view === 'settings' ? settingsExitBtn : settingsBtn);
+    : (view === 'shortcuts' ? shortcutsBackBtn : (view === 'settings' ? settingsExitBtn : settingsBtn));
   if (target && typeof target.focus === 'function') target.focus();
+}
+
+/* ---------------------------- 快捷键设置 ---------------------------- */
+
+/**
+ * 键位词汇表（keys.js）。它挂在 window 上，与页面里的快捷键监听共用同一份：
+ * 默认键位、匹配规则、按键显示文本都只有一处定义。
+ *
+ * 万一它没加载上（例如有人把 popup.js 单独拿出去跑），这一屏就退化成
+ * “静态显示默认键位、点了没反应”，而不是整个界面报错。
+ */
+const shortcutKeys = (typeof window !== 'undefined' && window.__BILISPEED_KEYS__) || null;
+
+/** 动作清单（interface 上的顺序就是它） */
+const SHORTCUT_ACTIONS = shortcutKeys ? shortcutKeys.ACTIONS : [];
+
+/** 当前键位 */
+let bindings = shortcutKeys ? shortcutKeys.normalizeBindings(null) : null;
+/** 当前步长：按一次加减速键走多远 */
+let step = shortcutKeys ? shortcutKeys.DEFAULT_STEP : null;
+/** 正在录制的动作；null 表示没在录 */
+let recording = null;
+
+/** 动作 -> 它的按键胶囊按钮 */
+const keyButtons = {
+  faster: keyFasterBtn,
+  slower: keySlowerBtn,
+  reset: keyResetBtn,
+};
+
+/** 把键位与步长画到界面上（录制中显示“按下新键…”） */
+function renderShortcuts() {
+  if (!shortcutKeys) return;
+
+  for (const action of SHORTCUT_ACTIONS) {
+    const btn = keyButtons[action];
+    if (!btn) continue;
+    const isRecording = recording === action;
+    btn.textContent = isRecording ? '按下新键…' : shortcutKeys.describeBinding(bindings[action]);
+    btn.classList.toggle('is-recording', isRecording);
+  }
+
+  if (stepSlider) stepSlider.value = String(step);
+  if (stepValueEl) stepValueEl.textContent = step.toFixed(2);
+}
+
+/** 读取已保存的键位与步长；读不到（第一次用、存储不可用）就用默认值 */
+async function loadShortcuts() {
+  if (!shortcutKeys) return;
+  try {
+    const data = (await chrome.storage.sync.get([shortcutKeys.BINDINGS_KEY, shortcutKeys.STEP_KEY])) || {};
+    bindings = shortcutKeys.normalizeBindings(data[shortcutKeys.BINDINGS_KEY]);
+    step = shortcutKeys.normalizeStep(data[shortcutKeys.STEP_KEY]);
+  } catch (err) {
+    /* 维持默认值：快捷键仍然能用，只是这一屏显示的是默认键位 */
+  }
+  renderShortcuts();
+}
+
+/** 落盘；写失败只影响下次打开时的显示，当前这次设置照样生效 */
+async function saveShortcuts() {
+  if (!shortcutKeys) return;
+  try {
+    await chrome.storage.sync.set({
+      [shortcutKeys.BINDINGS_KEY]: bindings,
+      [shortcutKeys.STEP_KEY]: step,
+    });
+  } catch (err) {
+    /* 见上 */
+  }
+}
+
+/** 开始录制：界面进入“按下新键…”，等下一次按键 */
+function startRecording(action) {
+  if (!shortcutKeys) return;
+  recording = action;
+  renderShortcuts();
+}
+
+/**
+ * 录制期间的按键处理。
+ * 只按修饰键（Shift/Ctrl…）时继续等，不会把 Shift 本身录进去；Esc 取消。
+ * @param {KeyboardEvent} event
+ */
+function onRecordKeydown(event) {
+  if (recording === null || !shortcutKeys) return;
+
+  // 这次按键归录制用：不让它再触发切屏、改倍速等其它行为
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (event.key === 'Escape') {
+    recording = null;
+    renderShortcuts();
+    return;
+  }
+
+  const binding = shortcutKeys.bindingFromEvent(event);
+  if (!binding) return; // 只按了修饰键，等真正的那个键
+
+  bindings = { ...bindings, [recording]: binding };
+  recording = null;
+  renderShortcuts();
+  saveShortcuts();
 }
 
 /* ---------------------------- 事件绑定 ---------------------------- */
@@ -618,14 +742,50 @@ if (aboutVersionEl) {
   }
 }
 
+// 快捷键屏的进 / 出：设置界面的「快捷键」进这一屏，「返回」回设置
+if (shortcutsBtn) {
+  shortcutsBtn.addEventListener('click', () => showView('shortcuts'));
+}
+if (shortcutsBackBtn) {
+  shortcutsBackBtn.addEventListener('click', () => showView('settings'));
+}
+
+// 点按键胶囊 -> 开始录一个新键
+for (const action of SHORTCUT_ACTIONS) {
+  const btn = keyButtons[action];
+  if (btn) btn.addEventListener('click', () => startRecording(action));
+}
+
+// 步长：拖动时只更新显示，松手才落盘（与倍速滑块同一套手感）
+if (stepSlider) {
+  const takeStep = () => {
+    if (!shortcutKeys) return;
+    step = shortcutKeys.normalizeStep(stepSlider.value);
+    renderShortcuts();
+  };
+  stepSlider.addEventListener('input', takeStep);
+  stepSlider.addEventListener('change', () => {
+    takeStep();
+    saveShortcuts();
+  });
+}
+
+// 录制监听挂在捕获阶段：抢在下面那个全局 keydown 之前把这次按键吃掉，
+// 所以录制时按 Esc 是“取消录制”，不会顺带退回上一屏
+if (shortcutKeys && typeof document.addEventListener === 'function') {
+  document.addEventListener('keydown', onRecordKeydown, true);
+}
+
 // PageUp / PageDown 快速跳档（←/→ 由原生 range 处理）
 document.addEventListener('keydown', (event) => {
+  if (recording !== null) return; // 正在录快捷键：这次按键归录制用
   if (settingsOpen) {
-    // 设置/关于界面里不该偷偷改倍速；Esc 退回上一层
+    // 设置/快捷键/关于界面里不该偷偷改倍速；Esc 退回上一层
     if (event.key === 'Escape') {
-      // 关于是从设置进去的，Esc 先回设置；设置里再按 Esc 才回倍速界面
+      // 关于与快捷键都是从设置进去的，Esc 先回设置；设置里再按 Esc 才回倍速界面
       const onAbout = aboutView && !aboutView.hidden;
-      showView(onAbout ? 'settings' : 'main');
+      const onShortcuts = shortcutsView && !shortcutsView.hidden;
+      showView(onAbout || onShortcuts ? 'settings' : 'main');
       event.preventDefault();
     }
     return;
@@ -645,6 +805,9 @@ document.addEventListener('keydown', (event) => {
 
 async function init() {
   render();
+  // 快捷键是全局偏好（与当前标签页是不是 B 站无关），所以在“非 B 站页面”
+  // 提前返回之前就先发起读取；不 await —— 读回来时那一屏自己会重画
+  loadShortcuts();
 
   embedded = isEmbedded();
   // 内嵌时接上「×」的链路，并**立刻**上报高度：

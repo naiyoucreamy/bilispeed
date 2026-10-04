@@ -70,11 +70,52 @@
       <input id="darkModeToggle" class="switch" type="checkbox" />
     </div>
 
+    <!-- 快捷键：进第四屏，改键位与每次加减的步长 -->
+    <button id="shortcutsBtn" class="nav-row" type="button">
+      <span>快捷键</span>
+      <span class="nav-arrow" aria-hidden="true">›</span>
+    </button>
+
     <!-- 最下面：进入关于界面 -->
     <button id="aboutBtn" class="nav-row" type="button">
       <span>关于</span>
       <span class="nav-arrow" aria-hidden="true">›</span>
     </button>
+  </main>
+
+  <!-- 快捷键界面：第四屏，从设置里的「快捷键」进入，「返回」回设置。
+       键位与步长都是全局偏好（不跟着标签页 / 视频走），改完页面里立刻生效。 -->
+  <main class="card" id="shortcutsView" hidden>
+    <div class="settings-top">
+      <h1 class="settings-title">快捷键</h1>
+      <button id="shortcutsBackBtn" class="exit" type="button">返回</button>
+    </div>
+
+    <!-- 三个动作各一行：点右侧的按键胶囊就能重新录一个键 -->
+    <div class="setting-row">
+      <span class="setting-name">加速</span>
+      <button id="keyFaster" class="keycap" type="button" aria-label="加速快捷键">]</button>
+    </div>
+
+    <div class="setting-row">
+      <span class="setting-name">减速</span>
+      <button id="keySlower" class="keycap" type="button" aria-label="减速快捷键">[</button>
+    </div>
+
+    <div class="setting-row">
+      <span class="setting-name">重置为 1x</span>
+      <button id="keyReset" class="keycap" type="button" aria-label="重置快捷键">\</button>
+    </div>
+
+    <!-- 步长：每次按加减速键走多远，粒度与倍速滑块一致（0.25 一档） -->
+    <div class="setting-row">
+      <label class="setting-name" for="stepSlider">步长</label>
+      <output id="stepValue" class="setting-value" for="stepSlider">0.25</output>
+    </div>
+    <input id="stepSlider" class="mini-slider" type="range"
+           min="0.25" max="16" step="0.25" value="0.25" aria-label="每次加减的步长" />
+
+    <p class="note">点右侧按键后按下新键即可改绑，按 Esc 取消。</p>
   </main>
 
   <!-- 关于界面：第三屏，同样靠 [hidden] 与另两屏互斥。
@@ -119,6 +160,8 @@
     </div>
   </main>
 
+  <!-- 键位词汇表：与页面里那套快捷键监听共用同一份定义，必须先于 popup.js 加载 -->
+  <script src="keys.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -803,6 +803,130 @@ body:hover .close,
    用于表达“当前不可用”的语义），但已经没有任何可见样式了。
    ============================================================ */
 
+/* ============================================================
+   快捷键界面：第四屏
+   三行「动作 + 按键胶囊」+ 一行步长滑块，尽量矮，不把面板撑高
+   ============================================================ */
+
+#shortcutsView[hidden] {
+  display: none;
+}
+
+#shortcutsView {
+  min-height: 84px;
+}
+
+/* 按键胶囊：点一下开始录制，平时显示当前键位。
+   用等宽字体 —— 改键前后宽度变化小，右上角那两枚图标键不会跟着跳。 */
+.keycap {
+  flex: 0 0 auto;
+  min-width: 46px;
+  max-width: 132px;
+  padding: 5px 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-mid);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), transform 0.1s var(--ease);
+}
+
+.keycap:hover {
+  color: var(--brand-deep);
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
+}
+
+.keycap:active {
+  transform: scale(0.96);
+}
+
+.keycap:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* 录制中：整颗胶囊变成实心强调色，一眼看出“正在等你按键” */
+.keycap.is-recording,
+.keycap.is-recording:hover {
+  color: #fff;
+  background: var(--accent);
+  border-color: transparent;
+}
+
+/* 步长数值：跟速度读数一样用等宽数字，拖动时不会左右抖 */
+.setting-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-mid);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 步长滑块：朴素轨道。
+   这里**不用** .slider —— 那条彩条读的是 --fill（倍速滑块的进度），
+   两个滑块共用一个变量会互相串味。 */
+.mini-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 20px;
+  margin: 2px 0 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mini-slider::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--line);
+}
+
+/* 5 - 14 = -9，一半就是 -4.5：圆钮正好骑在轨道中线上 */
+.mini-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -4.5px;
+  background: var(--surface);
+  border: 2px solid var(--brand);
+  border-radius: 50%;
+  box-shadow: var(--shadow-flat);
+  transition: transform 0.12s var(--ease);
+}
+
+.mini-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.1);
+}
+
+.mini-slider:focus-visible {
+  outline: none;
+}
+
+.mini-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 3px var(--surface),
+    0 0 0 6px color-mix(in srgb, var(--brand) 32%, transparent);
+}
+
+/* 底部说明：一句话，别把面板撑高 */
+.note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-soft);
+}
+
 /* 尊重“减少动态效果”的系统设置 */
 @media (prefers-reduced-motion: reduce) {
   * {
