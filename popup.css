@@ -32,6 +32,10 @@
   --line: #e8ecf1;
   --line-strong: #d5dce5;
 
+  /* ---------------- 警告：保存失败这类需要用户注意的状态 ---------------- */
+  --warn: #c8473f;
+  --warn-soft: #fdeeed;
+
   /* ---------------- 滑块进度色，由 JS 按速度值写入 ---------------- */
   --accent: var(--brand);
   --fill: 5%;
@@ -79,6 +83,10 @@
   --surface-sunken: #23272f;
   --line: #2b3038;
   --line-strong: #3b4149;
+
+  /* 深底上要把警告色提亮，才不至于糊成一片暗红 */
+  --warn: #ff9a90;
+  --warn-soft: #3a2422;
 
   /* 深色下投影要更重才分得出层次 */
   --shadow-flat: 0 1px 2px rgba(0, 0, 0, 0.5);
@@ -925,6 +933,21 @@ body:hover .close,
   font-size: 11px;
   line-height: 1.4;
   color: var(--text-soft);
+}
+
+/* 保存失败：说明文字变警告色，说清楚“这次没存上” */
+.note.is-error {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* 没存上的那颗胶囊也要标出来：底下垫一层警告底色 + 描边。
+   放在 .is-recording 之后 —— 万一两个状态同时在，以“没存上”为准。 */
+.keycap.is-unsaved,
+.keycap.is-unsaved:hover {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: var(--warn);
 }
 
 /* 尊重“减少动态效果”的系统设置 */

@@ -68,6 +68,7 @@ const keySlowerBtn = document.getElementById('keySlower');
 const keyResetBtn = document.getElementById('keyReset');
 const stepSlider = document.getElementById('stepSlider');
 const stepValueEl = document.getElementById('stepValue');
+const shortcutNote = document.getElementById('shortcutNote');
 const presetButtons = Array.from(document.querySelectorAll('.preset'));
 
 /* ---------------------------- 状态 ---------------------------- */
@@ -578,6 +579,25 @@ let step = shortcutKeys ? shortcutKeys.DEFAULT_STEP : null;
 /** 正在录制的动作；null 表示没在录 */
 let recording = null;
 
+/**
+ * 配置有没有成功读到过。
+ * **没读到过之前一律不写盘** —— 这是“配置会莫名丢失”的根因防护：
+ * 读失败时内存里是默认键位，此时任何一次保存都会把盘上的真实配置抹成默认值。
+ */
+let shortcutsLoaded = false;
+/**
+ * 用户本次已经改过的项（'bindings' / 'step'）。
+ * 存储在网络/账号同步下可能回得很慢，万一用户手更快，
+ * 读回来的旧值不许把用户刚改的那一项冲掉。
+ */
+const shortcutsTouched = new Set();
+/** 上次保存是否失败：失败必须说出来，不能假装存上了 */
+let shortcutsUnsaved = false;
+
+/** 底部那句说明的两种文案 */
+const SHORTCUT_NOTE = '点右侧按键后按下新键即可改绑，按 Esc 取消。';
+const SHORTCUT_NOTE_FAILED = '没保存上：浏览器存储暂时不可用，稍后再试一次。';
+
 /** 动作 -> 它的按键胶囊按钮 */
 const keyButtons = {
   faster: keyFasterBtn,
@@ -595,35 +615,98 @@ function renderShortcuts() {
     const isRecording = recording === action;
     btn.textContent = isRecording ? '按下新键…' : shortcutKeys.describeBinding(bindings[action]);
     btn.classList.toggle('is-recording', isRecording);
+    btn.classList.toggle('is-unsaved', shortcutsUnsaved);
   }
 
   if (stepSlider) stepSlider.value = String(step);
   if (stepValueEl) stepValueEl.textContent = step.toFixed(2);
+
+  // 没存上就说出来，别让用户以为改好了
+  if (shortcutNote) {
+    shortcutNote.textContent = shortcutsUnsaved ? SHORTCUT_NOTE_FAILED : SHORTCUT_NOTE;
+    shortcutNote.classList.toggle('is-error', shortcutsUnsaved);
+  }
 }
 
-/** 读取已保存的键位与步长；读不到（第一次用、存储不可用）就用默认值 */
+/**
+ * 读取已保存的键位与步长。
+ * 读到了才允许写盘；读不到就只按默认值显示，并且**禁止保存** ——
+ * 否则用户下次随便改点什么，盘上的真实配置都会被这里的默认值覆盖掉。
+ */
 async function loadShortcuts() {
   if (!shortcutKeys) return;
   try {
     const data = (await chrome.storage.sync.get([shortcutKeys.BINDINGS_KEY, shortcutKeys.STEP_KEY])) || {};
-    bindings = shortcutKeys.normalizeBindings(data[shortcutKeys.BINDINGS_KEY]);
-    step = shortcutKeys.normalizeStep(data[shortcutKeys.STEP_KEY]);
+    // 用户手比存储快时（读取还没回来就改了），只补他没碰过的那一项
+    if (!shortcutsTouched.has('bindings')) {
+      bindings = shortcutKeys.normalizeBindings(data[shortcutKeys.BINDINGS_KEY]);
+    }
+    if (!shortcutsTouched.has('step')) {
+      step = shortcutKeys.normalizeStep(data[shortcutKeys.STEP_KEY]);
+    }
+    shortcutsLoaded = true;
   } catch (err) {
-    /* 维持默认值：快捷键仍然能用，只是这一屏显示的是默认键位 */
+    /* 读不到：维持默认显示，同时不放行写盘（原因见上） */
+    shortcutsLoaded = false;
   }
   renderShortcuts();
 }
 
-/** 落盘；写失败只影响下次打开时的显示，当前这次设置照样生效 */
+/**
+ * 落盘。写的是完整一份配置（键位 + 步长），两者本来就是一个整体。
+ * 写失败（配额、存储被策略禁用、扩展刚更新导致上下文失效…）时标记出来，
+ * 让用户当场知道这次没存上，而不是过几天发现配置“自己丢了”。
+ */
 async function saveShortcuts() {
   if (!shortcutKeys) return;
+
+  // 配置根本没读到过：写下去就是用默认值覆盖用户的真实设置，宁可不写
+  if (!shortcutsLoaded) {
+    shortcutsUnsaved = true;
+    renderShortcuts();
+    return;
+  }
+
   try {
     await chrome.storage.sync.set({
       [shortcutKeys.BINDINGS_KEY]: bindings,
       [shortcutKeys.STEP_KEY]: step,
     });
+    shortcutsUnsaved = false;
   } catch (err) {
-    /* 见上 */
+    shortcutsUnsaved = true;
+  }
+  renderShortcuts();
+}
+
+/**
+ * 跟着存储走：别的入口（另一个标签页的悬浮面板、另一个窗口的弹窗）改了配置时，
+ * 把自己的内存同步过来。不这么做的话，这边下一次保存会拿“打开时的旧值”
+ * 把对方刚改的东西覆盖回去 —— 这是配置会莫名丢失的另一条路径。
+ * 自己写盘同样会收到这条通知，值一样，重画一次而已（不会来回写）。
+ */
+function watchShortcuts() {
+  if (!shortcutKeys) return;
+  try {
+    const area = chrome.storage && chrome.storage.onChanged;
+    if (!area || typeof area.addListener !== 'function') return;
+    area.addListener((changes, changedArea) => {
+      if (!changes) return;
+      if (changedArea !== undefined && changedArea !== 'sync') return;
+      const nextBindings = changes[shortcutKeys.BINDINGS_KEY];
+      const nextStep = changes[shortcutKeys.STEP_KEY];
+      if (!nextBindings && !nextStep) return;
+
+      if (nextBindings) bindings = shortcutKeys.normalizeBindings(nextBindings.newValue);
+      if (nextStep) step = shortcutKeys.normalizeStep(nextStep.newValue);
+      // 内存已经是最新的：别让随后才回来的那次读取把它冲回去
+      shortcutsTouched.add('bindings');
+      shortcutsTouched.add('step');
+      shortcutsLoaded = true;
+      renderShortcuts();
+    });
+  } catch (err) {
+    /* 监听不上不影响正常使用：只是别的入口的改动要等下次打开才看得到 */
   }
 }
 
@@ -656,6 +739,7 @@ function onRecordKeydown(event) {
   if (!binding) return; // 只按了修饰键，等真正的那个键
 
   bindings = { ...bindings, [recording]: binding };
+  shortcutsTouched.add('bindings');
   recording = null;
   renderShortcuts();
   saveShortcuts();
@@ -761,6 +845,7 @@ if (stepSlider) {
   const takeStep = () => {
     if (!shortcutKeys) return;
     step = shortcutKeys.normalizeStep(stepSlider.value);
+    shortcutsTouched.add('step');
     renderShortcuts();
   };
   stepSlider.addEventListener('input', takeStep);
@@ -808,6 +893,7 @@ async function init() {
   // 快捷键是全局偏好（与当前标签页是不是 B 站无关），所以在“非 B 站页面”
   // 提前返回之前就先发起读取；不 await —— 读回来时那一屏自己会重画
   loadShortcuts();
+  watchShortcuts();
 
   embedded = isEmbedded();
   // 内嵌时接上「×」的链路，并**立刻**上报高度：

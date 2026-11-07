@@ -259,7 +259,7 @@ function createEnv({
 
 /* ---------------- 设置界面环境（真跑 popup.js + keys.js） ---------------- */
 
-function createPopupEnv({ rate = 1, stored = {} } = {}) {
+function createPopupEnv({ rate = 1, stored = {}, syncReadBroken = false, syncWriteBroken = false } = {}) {
   const ids = [...HTML.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
   const hiddenIds = new Set([...HTML.matchAll(/id="([^"]+)"([^>]*)>/g)]
     .filter((m) => /\bhidden\b/.test(m[2]))
@@ -306,6 +306,7 @@ function createPopupEnv({ rate = 1, stored = {} } = {}) {
   };
 
   const store = new Map();
+  const onChangedListeners = [];
   const chrome = {
     tabs: {
       query: async () => [{ id: 1, url: 'https://www.bilibili.com/video/BV1AA411c7de' }],
@@ -318,17 +319,23 @@ function createPopupEnv({ rate = 1, stored = {} } = {}) {
         cb({ ok: true, rate: message.rate });
       },
     },
-    runtime: { lastError: undefined, getManifest: () => ({ version: '2.3.0' }) },
+    runtime: { lastError: undefined, getManifest: () => ({ version: '2.4.0' }) },
     scripting: { executeScript: async () => [] },
     storage: {
       sync: {
         get: async (keys) => {
+          if (syncReadBroken) throw new Error('storage unavailable');
           const out = {};
           for (const k of [].concat(keys)) if (k in config) out[k] = config[k];
           return out;
         },
-        set: async (obj) => { Object.assign(config, obj); written.push(JSON.parse(JSON.stringify(obj))); },
+        set: async (obj) => {
+          if (syncWriteBroken) throw new Error('quota exceeded');
+          Object.assign(config, obj);
+          written.push(JSON.parse(JSON.stringify(obj)));
+        },
       },
+      onChanged: { addListener: (fn) => onChangedListeners.push(fn) },
     },
   };
 
@@ -355,6 +362,8 @@ function createPopupEnv({ rate = 1, stored = {} } = {}) {
     el: (id) => elements.get(id),
     /** 在设置界面里敲一下键盘（录制走的就是这条链路） */
     pressKey: (event) => document._fire('keydown', event),
+    /** 模拟另一个入口（另一个弹窗 / 悬浮面板）改了配置 */
+    emitChange: (changes, area = 'sync') => onChangedListeners.forEach((fn) => fn(changes, area)),
   };
 }
 
@@ -395,7 +404,7 @@ const KEYS_CODE = stripComments(KEYS_SRC);
     check('三个脚本条目都在 document_start',
       MANIFEST.content_scripts.every((c) => c.run_at === 'document_start'), true);
     check('权限没有被放大', MANIFEST.permissions, ['storage', 'scripting']);
-    check('扩展版本没被顺手改掉', MANIFEST.version, '2.3.0');
+    check('扩展版本没被顺手改掉', MANIFEST.version, '2.4.0');
   }
 
   console.log('\n[2] 词汇表：默认键位、显示文本、匹配规则');
@@ -807,6 +816,56 @@ const KEYS_CODE = stripComments(KEYS_SRC);
     const writesOnLeave = leaving.written.length;
     leaving.pressKey(keyEvent('KeyZ'));
     check('取消后按键不再改绑定', leaving.written.length, writesOnLeave);
+  }
+
+  console.log('\n[13] 配置保存：失败要说出来，读失败不许拿默认值覆盖');
+  {
+    // ---- 读失败：不放行写盘，改键当场标出“没存上” ----
+    const unreadable = createPopupEnv({ rate: 1, syncReadBroken: true });
+    await wait(30);
+    unreadable.el('shortcutsBtn')._fire('click');
+    unreadable.el('keyFaster')._fire('click');
+    unreadable.pressKey(keyEvent('KeyH'));
+    check('读失败时改键不写盘（不覆盖盘上的真实配置）', unreadable.written.length, 0);
+    check('读失败时胶囊标出没存上',
+      unreadable.el('keyFaster').classList.contains('is-unsaved'), true);
+    check('读失败时底部说明变成失败文案',
+      unreadable.el('shortcutNote').textContent.includes('没保存上'), true);
+
+    // ---- 写失败：内存照常生效，但必须当场说出来 ----
+    const unwritable = createPopupEnv({ rate: 1, syncWriteBroken: true });
+    await wait(30);
+    unwritable.el('shortcutsBtn')._fire('click');
+    unwritable.el('keyFaster')._fire('click');
+    unwritable.pressKey(keyEvent('KeyJ'));
+    await wait(0); // saveShortcuts 是异步的，等它把失败标记落下来
+    check('写失败时胶囊标出没存上',
+      unwritable.el('keyFaster').classList.contains('is-unsaved'), true);
+    check('写失败时底部说明变成失败文案',
+      unwritable.el('shortcutNote').textContent.includes('没保存上'), true);
+    check('写失败时本次仍然生效（内存里是新键位）',
+      unwritable.el('keyFaster').textContent, 'J');
+
+    // ---- 跨入口同步：别的入口改完，这边跟着走，不回写旧值 ----
+    const synced = createPopupEnv({ rate: 1, stored: { 'bilispeed.step': 1 } });
+    await wait(30);
+    synced.el('shortcutsBtn')._fire('click');
+    check('同步前步长是 1', synced.el('stepValue').textContent, '1.00');
+
+    synced.emitChange({ 'bilispeed.step': { newValue: 4 } }, 'sync');
+    check('别的入口改了步长，这边立刻跟上', synced.el('stepValue').textContent, '4.00');
+
+    // 这边再落一次盘：写的必须是同步后的 4，而不是打开时的旧值 1
+    synced.el('stepSlider').value = '4';
+    synced.el('stepSlider')._fire('change');
+    check('回写的是同步后的值', synced.written.at(-1)['bilispeed.step'], 4);
+
+    // 不是 sync 区域的变化不处理
+    const otherArea = createPopupEnv({ rate: 1, stored: { 'bilispeed.step': 1 } });
+    await wait(30);
+    otherArea.el('shortcutsBtn')._fire('click');
+    otherArea.emitChange({ 'bilispeed.step': { newValue: 8 } }, 'local');
+    check('非 sync 区域的变化不影响设置界面', otherArea.el('stepValue').textContent, '1.00');
   }
 
   console.log(`\n结果：${pass} 通过 / ${fail} 失败\n`);

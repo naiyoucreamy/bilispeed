@@ -1,0 +1,13 @@
+/* BiliSpeed - 播放器倍速按钮的轻量档位条（页面级样式，仅此一条）
+   ------------------------------------------------
+   目的只有一个：把 B 站自带的倍速菜单藏掉，
+   换成 speedbar.js 在按钮上方弹出的那条窄档位条。
+
+   只藏 bpx 播放器的倍速菜单（当前 B 站全量使用的播放器），
+   不动按钮本身、不动其它任何播放器元素；旧版播放器的菜单不在这里，
+   所以万一遇到旧版，行为保持原样，不会出现「点倍速没反应」。 */
+.bpx-player-ctrl-playbackrate-menu {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
